@@ -1,8 +1,8 @@
 run_calibration:
   name: Run Calibration
   description: |
-    Sweep the Shelly dimmer from 20% to 100% to build a per-boiler watt curve and store it for future calculations.
-    The controller steps in 1% increments and waits 3 seconds between samples.
+    Start an automated calibration run on the BC module. The device will sweep through power levels
+    and report measured watts. Results are stored locally for future calculations.
   fields:
     config_entry_id:
       name: Config Entry ID
@@ -13,7 +13,7 @@ run_calibration:
 
 cancel_calibration:
   name: Cancel Calibration
-  description: Request the active calibration sweep to stop after the current measurement.
+  description: Request the active calibration run to stop.
   fields:
     config_entry_id:
       name: Config Entry ID
@@ -21,3 +21,4 @@ cancel_calibration:
       example: "1234567890abcdef1234567890abcdef"
       selector:
         text: {}
+

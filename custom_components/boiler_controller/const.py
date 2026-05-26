@@ -5,49 +5,38 @@ PLATFORMS = ["sensor", "select", "number", "button"]
 
 # Configuration flow step IDs
 STEP_POWER_SENSOR = "power_sensor"
-STEP_SHELLY_CONFIG = "shelly_config"
+STEP_DEVICE_CONFIG = "device_config"
 
 # Configuration keys
-CONF_P1_TOTAL_ENTITY = "power_sensor"  # Renamed to be more generic
-CONF_SHELLY_URL = "shelly_url"
-CONF_SHELLY_POLL_INTERVAL = "shelly_poll_interval"
-CONF_SHELLY_ID = "shelly_id"
+CONF_P1_TOTAL_ENTITY = "power_sensor"
+CONF_DEVICE_URL = "device_url"
+CONF_POLL_INTERVAL = "poll_interval"
+CONF_DEVICE_ID = "device_id"
 
-# Shelly RPC endpoints
-SHELLY_RPC_DEVICE_INFO = "/rpc/Shelly.GetDeviceInfo"
-SHELLY_RPC_LIGHT_STATUS = "/rpc/Light.GetStatus"
-SHELLY_RPC_LIGHT_SET = "/rpc/Light.Set"
-SHELLY_RPC_LIGHT_CONFIG = "/rpc/Light.GetConfig"
+# Boiler Controller mDNS hostname prefix (pb-bc-*)
+BC_HOST_PREFIX = ("pb-bc-",)
 
-# Shelly Dimmer 0/1-10V Gen3 units report either the legacy (0110) hostname prefix
-# or the newer "plus" prefix depending on firmware/model. Accept both so discovery
-# works for every variant.
-SHELLY_DIMMER_HOST_PREFIX = ("shelly0110dimg3-", "shellyplusdimg3-")
+# Control modes
+BOILER_MODE_AUTO = "auto"
+BOILER_MODE_MANUAL = "manual"
+BOILER_MODE_ON = "on"
+BOILER_MODE_OFF = "off"
+BOILER_MODE_CALIBRATING = "calibrating"
+BOILER_MODES = [BOILER_MODE_AUTO, BOILER_MODE_MANUAL, BOILER_MODE_ON, BOILER_MODE_OFF]
 
-# Default settings for the controller
-DEFAULT_MIN_DIMMER_VALUE = 0
-DEFAULT_MAX_DIMMER_VALUE = 100
-# Manual override defaults and modes
-MIN_MANUAL_BRIGHTNESS = 20
-DEFAULT_MANUAL_BRIGHTNESS = MIN_MANUAL_BRIGHTNESS
-DIMMER_MODE_AUTO = "auto"
-DIMMER_MODE_MANUAL = "manual"
-DIMMER_MODES = [DIMMER_MODE_AUTO, DIMMER_MODE_MANUAL]
-# Minimum spacing between calculator-driven dimmer updates
-DEFAULT_CALCULATOR_MIN_INTERVAL = 15
-# Seconds between Shelly status polls
-# Where it updates all the sensor values
-DEFAULT_SHELLY_POLL_INTERVAL = 15
+# Manual mode defaults
+DEFAULT_MANUAL_WATTS = 500
 
-# Calibration service/options
+# Seconds between device status polls (updates all sensor values)
+DEFAULT_POLL_INTERVAL = 10
+
+# Calibration service names
 SERVICE_RUN_CALIBRATION = "run_calibration"
 SERVICE_CANCEL_CALIBRATION = "cancel_calibration"
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
-CALIBRATION_START_PERCENTAGE = 20
-CALIBRATION_END_PERCENTAGE = 100
-CALIBRATION_STEP_PERCENTAGE = 1
-CALIBRATION_SETTLE_SECONDS = 3
-CALIBRATION_STORAGE_VERSION = 1
+
+# Poll interval while waiting for device calibration to complete
+CALIBRATION_POLL_SECONDS = 5
 
 # Safety limits
 MAX_EXPORT_WATTS = 2200

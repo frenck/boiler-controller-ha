@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Boiler Controller Instellen",
-        "description": "Selecteer je vermogenssensor en vul de Shelly apparaatdetails in.",
+        "description": "Stel de Boiler Controller integratie in.",
         "data": {
           "name": "Integratie Naam"
         }
@@ -15,22 +15,21 @@
           "p1_total_entity": "Vermogen Sensor"
         }
       },
-      "shelly_config": {
-        "title": "Shelly Configureren",
-        "description": "Vul de Shelly URL of IP adres in. Startte je deze flow vanuit een gevonden apparaat? Dan vullen we dit veld alvast voor je in (bijv. {example_url1} of {example_url2}).",
+      "device_config": {
+        "title": "BC Module Configureren",
+        "description": "Vul de URL of het IP-adres van je BC module in (bijv. {example_url}). Bij automatisch gevonden apparaten wordt dit veld vooringevuld.",
         "data": {
-          "shelly_url": "Shelly Basis URL"
+          "device_url": "Module Basis URL"
         }
       }
     },
     "error": {
       "no_power_sensors": "Geen vermogen sensoren gevonden in Home Assistant",
       "entity_not_found": "De geselecteerde entiteit werd niet gevonden",
-      "no_dimmer_entities": "Geen licht of input_number entiteiten gevonden in Home Assistant",
       "invalid_url": "Geef een geldige http(s) URL op",
-      "cannot_connect": "Kan geen verbinding maken met het Shelly apparaat",
-      "cannot_identify": "Kan het Shelly apparaat ID niet uitlezen",
-      "device_in_use": "Deze Shelly is al geconfigureerd"
+      "cannot_connect": "Kan geen verbinding maken met de BC module",
+      "cannot_identify": "Kan het module ID niet bepalen",
+      "device_in_use": "Deze module is al geconfigureerd"
     },
     "abort": {
       "already_configured": "Boiler Controller is al geconfigureerd",
@@ -41,9 +40,9 @@
     "step": {
       "init": {
         "title": "Boiler Controller Opties",
-        "description": "Wijzig de vermogenssensor of Shelly die deze controller gebruikt",
+        "description": "Wijzig de vermogenssensor of BC module die deze controller gebruikt",
         "data": {
-          "change_devices": "Wijzig vermogenssensor of Shelly instellingen"
+          "change_devices": "Wijzig vermogenssensor of apparaatinstellingen"
         }
       },
       "power_sensor": {
@@ -53,11 +52,11 @@
           "p1_total_entity": "Stroommeter"
         }
       },
-      "shelly_config": {
-        "title": "Shelly Instellingen Bijwerken",
-        "description": "Pas de Shelly URL aan. Als het apparaat eerder gevonden werd, tonen we hier de huidige waarde.",
+      "device_config": {
+        "title": "Module Instellingen Bijwerken",
+        "description": "Pas de BC module URL aan. De huidige URL wordt hier getoond.",
         "data": {
-          "shelly_url": "Shelly Basis URL"
+          "device_url": "Module Basis URL"
         }
       }
     }

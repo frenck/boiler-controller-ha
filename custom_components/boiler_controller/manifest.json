@@ -10,9 +10,6 @@
   "requirements": [],
   "version": "1.0.0",
   "zeroconf": [
-    { "type": "_http._tcp.local.", "name": "shelly0110dimg3-*" },
-    { "type": "_http._tcp.local.", "name": "shellyplusdimg3-*" },
-    { "type": "_shelly._tcp.local.", "name": "shelly0110dimg3-*" },
-    { "type": "_shelly._tcp.local.", "name": "shellyplusdimg3-*" }
+    { "type": "_http._tcp.local.", "name": "pb-bc-*" }
   ]
 }
