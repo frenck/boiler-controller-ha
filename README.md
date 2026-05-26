@@ -47,8 +47,8 @@ To abort a running calibration press **Calibrate Stop**.
 
 | Entity | Type | Description |
 | --- | --- | --- |
-| **{Name} Control Mode** | Select | Active control mode: `auto`, `manual`, `on`, `off`. Disabled during calibration. |
-| **{Name} Manual Power** | Number (W) | Target wattage used in `manual` mode (0–2200 W). Only available in `manual` mode. |
+| **Control Mode** | Select | Active control mode: `auto`, `manual`, `on`, `off`. Disabled during calibration. |
+| **Manual Power** | Number (W) | Target wattage used in `manual` mode (0–2200 W). Only available in `manual` mode. |
 | **Calibrate Start** | Button | Starts an automated calibration run on the BC device. |
 | **Calibrate Stop** | Button | Requests the active calibration run to stop. |
 
@@ -56,16 +56,16 @@ To abort a running calibration press **Calibrate Stop**.
 
 | Entity | Type | Description |
 | --- | --- | --- |
-| **{Name} Status** | Sensor (text) | `Running` when the boiler is heating, `Idle` when off, `Calibration` during a calibration run. |
-| **{Name} Power Sensor** | Sensor (W) | Mirrors the configured P1 entity so you can confirm the source data. |
-| **{Name} Last Control Update** | Sensor (timestamp) | Timestamp of the last heating command sent to the device. |
-| **{Name} Device Power** | Sensor (W) | Live power draw reported by the BC device. |
-| **{Name} Heating Percentage** | Sensor (%) | Current output percentage reported by the BC device. |
-| **{Name} Device Temperature** | Sensor (°C) | Boiler temperature reported by the BC device. |
-| **{Name} Device Energy** | Sensor (kWh) | Cumulative energy consumed by the boiler. |
-| **{Name} Firmware Version** | Sensor | BC device firmware version. |
-| **{Name} IP Address** | Sensor | IP address of the BC device. |
-| **{Name} WiFi Strength / RSSI / Uptime / Up Since** | Sensors | BC device diagnostics. |
+| **Status** | Sensor (text) | `Running` when the boiler is heating, `Idle` when off, `Calibration` during a calibration run. |
+| **Power Sensor** | Sensor (W) | Mirrors the configured P1 entity so you can confirm the source data. |
+| **Last Control Update** | Sensor (timestamp) | Timestamp of the last heating command sent to the device. |
+| **Device Power** | Sensor (W) | Live power draw reported by the BC device. |
+| **Heating Percentage** | Sensor (%) | Current output percentage reported by the BC device. |
+| **Device Temperature** | Sensor (°C) | Boiler temperature reported by the BC device. |
+| **Device Energy** | Sensor (kWh) | Cumulative energy consumed by the boiler. |
+| **Firmware Version** | Sensor | BC device firmware version. |
+| **IP Address** | Sensor | IP address of the BC device. |
+| **WiFi Strength / RSSI / Uptime / Up Since** | Sensors | BC device diagnostics. |
 
 ## Example Automations
 
