@@ -14,10 +14,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     DOMAIN,
     VERSION,
-    CALIBRATION_START_PERCENTAGE,
-    CALIBRATION_END_PERCENTAGE,
-    CALIBRATION_STEP_PERCENTAGE,
-    CALIBRATION_SETTLE_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,8 +25,8 @@ def _device_info(config_entry: ConfigEntry, controller) -> Dict[str, Any]:
     return {
         "identifiers": {(DOMAIN, config_entry.entry_id)},
         "name": config_entry.title,
-        "manufacturer": "Boiler Controller",
-        "model": "P1 to Shelly Controller",
+        "manufacturer": "Powerbaas",
+        "model": "Boiler Controller",
         "sw_version": str(version),
     }
 
@@ -117,12 +113,7 @@ class BoilerCalibrationButton(_BaseCalibrationButton):
 
         async def _run_calibration() -> None:
             try:
-                await self.controller.async_run_calibration(
-                    min_percentage=CALIBRATION_START_PERCENTAGE,
-                    max_percentage=CALIBRATION_END_PERCENTAGE,
-                    step_percentage=CALIBRATION_STEP_PERCENTAGE,
-                    settle_seconds=CALIBRATION_SETTLE_SECONDS,
-                )
+                await self.controller.async_run_calibration()
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.error("Calibration failed for %s: %s", self.config_entry.title, err)
                 await self._async_notify(f"Calibration failed: {err}")

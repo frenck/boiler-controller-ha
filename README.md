@@ -1,119 +1,115 @@
 # Boiler Controller HA Integration
 
-Boiler Controller turns your electric boiler into a water battery. Instead of exporting surplus energy, it dumps the excess reported by your P1 meter straight into the heater so you store free solar/dynamic energy as hot water.
+Boiler Controller turns your electric boiler into a water battery. Instead of exporting surplus energy, it sends the excess reported by your P1 meter straight into the boiler so you store free solar or dynamic-tariff energy as hot water.
 
 ## Features
 
-This integration:
-- Reads data from a P1 smart meter via an existing Home Assistant device
-- Controls a Shelly Dimmer 0/1-10V PM Gen3 based on live net consumption
-- Automatically switches between different dimmer percentages depending on consumption
-- Provides Shelly telemetry sensors (voltage, current, power, temperature, energy)
-- Exposes manual override entities so you can switch between automatic logic and a fixed brightness when needed
+- Reads live net consumption/production from a P1 smart meter entity in Home Assistant
+- Controls a Boiler Controller (BC) device over HTTP using watt-based setpoints
+- Four control modes: `auto`, `manual`, `on`, `off`
+- Exposes device telemetry sensors (power, heating percentage, temperature, energy, RSSI)
+- Built-in calibration support — run a manual sweep to build the watt/percentage curve immediately, or let the device calibrate itself automatically over time
 
 ## Installation
 
 1. Install via HACS or copy the `custom_components/boiler_controller` folder to your Home Assistant configuration
 2. Restart Home Assistant
-3. Go to Settings > Devices & Services
-4. Click "Add Integration" and search for "Boiler Controller"
+3. Go to **Settings › Devices & Services**
+4. Click **Add Integration** and search for **Boiler Controller**
 5. Follow the configuration steps:
-   - Select your P1 smart meter device
-   - Choose the correct power entity from the P1 meter
-   - Select your Shelly Dimmer device
+   - Select your P1 smart meter power entity
+   - Enter the URL of your BC device (e.g. `http://192.168.1.50`)
 
-## Configuration
+## Control Modes
 
-The integration requires:
-- A working P1 smart meter integration in Home Assistant
-- A Boiler Controller device configured with the P1 power sensor and Shelly Dimmer
+| Mode | Behaviour |
+| --- | --- |
+| `auto` | Continuously reads the P1 surplus and sends the matching wattage to the boiler |
+| `manual` | Sends a fixed wattage you specify with the **Manual Power** entity |
+| `on` | Sets the boiler to 100% |
+| `off` | Sets the boiler to 0% (default on startup) |
 
-### Calibration (do this before use)
+Switch modes with the **Control Mode** select entity on the device page or via automations.
 
-Every dimmer behaves slightly differently and the Shelly power stage reacts differently as it warms up. Run the calibration sweep once before you start relying on the automation so the controller knows how many watts belong to each brightness step.
+## Calibration
 
-1. Open the Boiler Controller device page in Home Assistant and press the calibration button (or, if you prefer Services, call `boiler_controller.run_calibration` for your config entry).
-2. Let the sweep run from 20% (*) to 100%. The controller will record the wattage for every 1% step and store it as the active profile.
-3. If you change hardware or notice large seasonal deviations, rerun the calibration—this profile is the backbone of the calculator (*).
+Run the calibration sweep once so the BC device knows how many watts correspond to each output percentage. This is stored on the device itself.
 
-If no calibration exists, the integration falls back to the built-in profile listed in `calculator.py`, but the results are always better with a fresh measurement from your own installation.
+1. Open the Boiler Controller device page and press **Calibrate Start**.
+2. The integration sets the status to `Calibrating` and the Control Mode entity becomes unavailable while the sweep runs.
+3. When the sweep finishes the integration returns to the previous control mode automatically.
 
-\* The power regulator behaves erratically below 20%.
-\* A future release will redo the calibration automatically based on detected performance drift.
+To abort a running calibration press **Calibrate Stop**.
 
-## Advanced Settings & Manual Override
+## Entities
 
-For ad-hoc control you also get two helper entities once the integration is set up:
-
-- `Select` – **{Integration Name} Dimmer Mode**: choose `auto` to let the controller react to power usage, or `manual` to override the Shelly brightness yourself.
-- `Number` – **{Integration Name} Manual Brightness**: specify the brightness percentage (20–100). This value is only applied when the mode select is in `manual`.
-
-Switching back to `auto` immediately returns control to the P1-driven logic.
-
-## Diagnostics & Telemetry
-
-The integration exposes multiple diagnostic sensors in Home Assistant. Besides the Shelly telemetry (voltage, current, power, temperature, energy), you will also see **{Integration Name} Last Dimmer Update**. This timestamp sensor records the last moment the controller actually adjusted the Shelly brightness, whether triggered automatically by the calculator or manually via the override entities. It is not tied to general sensor updates, so its value only changes after a dim command is sent to the Shelly.
+### Controls
 
 | Entity | Type | Description |
 | --- | --- | --- |
-| **{Integration Name} Status** | Sensor (text) | Shows `Running` when the Shelly dimmer output is ON, `Idle` when it is OFF, and `Error` if Shelly reports an error. Attributes include dimmer bounds, current Shelly metrics, and whether manual mode is active. |
-| **{Integration Name} Power Sensor** | Sensor (number, W) | Mirrors the configured P1 entity so you can quickly confirm the source data the controller uses. |
-| **{Integration Name} Last Dimmer Update** | Sensor (timestamp) | Timestamp of the last successful Shelly brightness command, regardless of whether it was auto or manual. |
-| **{Integration Name} Shelly Brightness / Voltage / Current / Power / Temperature / Energy** | Sensors | Live telemetry polled from the Shelly device. These sensors update whenever the controller’s Shelly poll loop publishes new data. |
+| **{Name} Control Mode** | Select | Active control mode: `auto`, `manual`, `on`, `off`. Disabled during calibration. |
+| **{Name} Manual Power** | Number (W) | Target wattage used in `manual` mode (0–2200 W). Only available in `manual` mode. |
+| **Calibrate Start** | Button | Starts an automated calibration run on the BC device. |
+| **Calibrate Stop** | Button | Requests the active calibration run to stop. |
 
-## Logic
+### Sensors
 
-The controller always works from the calibration profile (either your recorded one or the bundled default curve):
+| Entity | Type | Description |
+| --- | --- | --- |
+| **{Name} Status** | Sensor (text) | `Running` when the boiler is heating, `Idle` when off, `Calibration` during a calibration run. |
+| **{Name} Power Sensor** | Sensor (W) | Mirrors the configured P1 entity so you can confirm the source data. |
+| **{Name} Last Control Update** | Sensor (timestamp) | Timestamp of the last heating command sent to the device. |
+| **{Name} Device Power** | Sensor (W) | Live power draw reported by the BC device. |
+| **{Name} Heating Percentage** | Sensor (%) | Current output percentage reported by the BC device. |
+| **{Name} Device Temperature** | Sensor (°C) | Boiler temperature reported by the BC device. |
+| **{Name} Device Energy** | Sensor (kWh) | Cumulative energy consumed by the boiler. |
+| **{Name} Firmware Version** | Sensor | BC device firmware version. |
+| **{Name} IP Address** | Sensor | IP address of the BC device. |
+| **{Name} WiFi Strength / RSSI / Uptime / Up Since** | Sensors | BC device diagnostics. |
 
-1. **Baseline lookup** – take the current Shelly brightness and read the expected wattage from the profile. If that entry is missing (e.g. Shelly just woke up), fall back to the live Shelly reading.
-2. **Add the grid delta** – combine the baseline with the current P1 surplus/deficit (negative grid flow means import). This becomes the target wattage we would like the boiler to draw.
-3. **Find the best matching point** – search the calibration profile for the lowest percentage whose wattage can deliver the target value (respecting the hard cap of 2.2 kW, `MAX_EXPORT_WATTS`).
-4. **Clamp to allowed range** – enforce the configured min/max dimmer bounds and send that final percentage to the Shelly.
+## Example Automations
 
-Because the profile already captures how your dimmer responds at each step, this approach automatically compensates for situations where warm hardware performs better than cold hardware.
-
-## Example: Switching from Auto to Manual
-
-You can take manual control of the boiler at any time, for example when you want to heat the boiler during low energy prices or simply need hot water on demand:
-
-**Via the UI:**
-1. Go to your Boiler Controller device page in Home Assistant
-2. Find the **Dimmer Mode** select entity
-3. Change it from `auto` to `manual`
-4. Then adjust the **Manual Brightness** number entity to your desired percentage (e.g., 80%)
-5. The boiler will immediately switch to that brightness level, regardless of what the P1 meter reports
-
-**Via an Automation:**
+**Force the boiler on during off-peak hours:**
 ```yaml
-alias: "Set boiler to 80% during off-peak hours"
+alias: "Boiler on during off-peak"
 trigger:
   - platform: time
     at: "23:00:00"
 action:
   - service: select.select_option
     target:
-      entity_id: select.boiler_controller_dimmer_mode
+      entity_id: select.boiler_controller_control_mode
     data:
-      option: manual
-  - service: number.set_value
-    target:
-      entity_id: number.boiler_controller_manual_brightness
-    data:
-      value: 80
+      option: "on"
 ```
 
-**Returning to automatic mode:**
+**Return to auto mode in the morning:**
 ```yaml
-alias: "Return boiler to auto after off-peak hours"
+alias: "Boiler back to auto"
 trigger:
   - platform: time
     at: "07:00:00"
 action:
   - service: select.select_option
     target:
-      entity_id: select.boiler_controller_dimmer_mode
+      entity_id: select.boiler_controller_control_mode
     data:
       option: auto
 ```
 
-Note: replace `boiler_controller` in the entity IDs with the name of your config entry if you chose a different name during setup.
+**Set a fixed wattage manually:**
+```yaml
+action:
+  - service: select.select_option
+    target:
+      entity_id: select.boiler_controller_control_mode
+    data:
+      option: manual
+  - service: number.set_value
+    target:
+      entity_id: number.boiler_controller_manual_power
+    data:
+      value: 1000
+```
+
+> Replace `boiler_controller` in the entity IDs with the slug of your config entry name if you chose a different name during setup.

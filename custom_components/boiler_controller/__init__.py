@@ -14,10 +14,6 @@ from .const import (
     SERVICE_RUN_CALIBRATION,
     SERVICE_CANCEL_CALIBRATION,
     ATTR_CONFIG_ENTRY_ID,
-    CALIBRATION_START_PERCENTAGE,
-    CALIBRATION_END_PERCENTAGE,
-    CALIBRATION_STEP_PERCENTAGE,
-    CALIBRATION_SETTLE_SECONDS,
 )
 from .controller import BoilerController
 
@@ -123,26 +119,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     async def _handle_run_calibration(call: ServiceCall) -> None:
         controller = _async_resolve_controller(hass, call.data.get(ATTR_CONFIG_ENTRY_ID))
-
-        min_pct = CALIBRATION_START_PERCENTAGE
-        max_pct = CALIBRATION_END_PERCENTAGE
-        if max_pct < min_pct:
-            raise HomeAssistantError("max_percentage must be greater than or equal to min_percentage")
-
-        _LOGGER.info("Starting calibration for Boiler Controller entry %s", controller.config_entry.entry_id)
-        profile = await controller.async_run_calibration(
-            min_percentage=min_pct,
-            max_percentage=max_pct,
-            step_percentage=CALIBRATION_STEP_PERCENTAGE,
-            settle_seconds=CALIBRATION_SETTLE_SECONDS,
-        )
-
-        points_recorded = len(profile.get("points", [])) if profile else 0
-        _LOGGER.info(
-            "Calibration completed for entry %s (%s points recorded)",
-            controller.config_entry.entry_id,
-            points_recorded,
-        )
+        _LOGGER.info("Starting calibration for entry %s", controller.config_entry.entry_id)
+        await controller.async_run_calibration()
+        _LOGGER.info("Calibration completed for entry %s", controller.config_entry.entry_id)
 
     hass.services.async_register(
         DOMAIN,

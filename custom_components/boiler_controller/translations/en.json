@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Setup Boiler Controller",
-        "description": "Select your power sensor and provide the Shelly device details.",
+        "description": "Set up the Boiler Controller integration.",
         "data": {
           "name": "Integration Name"
         }
@@ -15,35 +15,34 @@
           "p1_total_entity": "Power Sensor"
         }
       },
-      "shelly_config": {
-        "title": "Configure Shelly Device",
-        "description": "Enter the Shelly URL or IP address. If you started this flow from a discovered device we will pre-fill the field for you (e.g. {example_url1} or {example_url2}).",
+      "device_config": {
+        "title": "Configure BC Module",
+        "description": "Enter the URL or IP address of your BC module (e.g. {example_url}). Auto-discovered devices will pre-fill this field.",
         "data": {
-          "shelly_url": "Shelly Base URL"
+          "device_url": "Module Base URL"
         }
       }
     },
     "error": {
       "no_power_sensors": "No power sensors found in Home Assistant",
       "entity_not_found": "The selected entity was not found",
-      "no_dimmer_entities": "No light or input_number entities found in Home Assistant",
       "invalid_url": "Provide a valid http(s) URL",
-      "cannot_connect": "Unable to reach the Shelly device",
-      "cannot_identify": "Unable to read the Shelly device identity",
-      "device_in_use": "This Shelly device is already configured"
+      "cannot_connect": "Unable to reach the BC module",
+      "cannot_identify": "Unable to determine the module identity",
+      "device_in_use": "This module is already configured"
     },
     "abort": {
       "already_configured": "Boiler Controller is already configured",
-      "unsupported_device": "The discovered device is not a supported Shelly dimmer"
+      "unsupported_device": "The discovered device is not a supported BC module"
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Boiler Controller Options",
-        "description": "Switch the power sensor or Shelly device used by this controller",
+        "description": "Switch the power sensor or BC module used by this controller",
         "data": {
-          "change_devices": "Change power sensor or Shelly settings"
+          "change_devices": "Change power sensor or device settings"
         }
       },
       "power_sensor": {
@@ -53,11 +52,11 @@
           "p1_total_entity": "Power Sensor"
         }
       },
-      "shelly_config": {
-        "title": "Update Shelly Settings",
-        "description": "Adjust the Shelly URL. If the device was discovered previously, the current URL is shown here.",
+      "device_config": {
+        "title": "Update Module Settings",
+        "description": "Adjust the BC module URL. The current URL is shown here.",
         "data": {
-          "shelly_url": "Shelly Base URL"
+          "device_url": "Module Base URL"
         }
       }
     }

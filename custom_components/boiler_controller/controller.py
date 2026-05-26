@@ -9,29 +9,26 @@ from homeassistant.util import dt as dt_util
 from .const import (
     DOMAIN,
     CONF_P1_TOTAL_ENTITY,
-    CONF_SHELLY_URL,
-    CONF_SHELLY_ID,
-    CONF_SHELLY_POLL_INTERVAL,
-    DEFAULT_MIN_DIMMER_VALUE,
-    DEFAULT_MAX_DIMMER_VALUE,
-    DEFAULT_CALCULATOR_MIN_INTERVAL,
-    DEFAULT_SHELLY_POLL_INTERVAL,
-    DEFAULT_MANUAL_BRIGHTNESS,
-    MIN_MANUAL_BRIGHTNESS,
-    DIMMER_MODE_AUTO,
-    DIMMER_MODE_MANUAL,
-    DIMMER_MODES,
+    CONF_DEVICE_URL,
+    CONF_POLL_INTERVAL,
+    DEFAULT_POLL_INTERVAL,
+    DEFAULT_MANUAL_WATTS,
+    BOILER_MODE_AUTO,
+    BOILER_MODE_MANUAL,
+    BOILER_MODE_ON,
+    BOILER_MODE_OFF,
+    BOILER_MODES,
+    CALIBRATION_POLL_SECONDS,
+    MAX_EXPORT_WATTS,
 )
-from .shelly_client import ShellyClient
-from .calculator import Calculator
-from .calibration import CalibrationStore, points_to_thresholds
+from .bc_client import BCClient
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class BoilerController:
     """Controller for managing boiler based on P1 data."""
-    
+
     def __init__(self, hass: HomeAssistant, config_entry, integration_version: str | None):
         self.hass = hass
         self.config_entry = config_entry
@@ -39,87 +36,77 @@ class BoilerController:
         self._cancel_listener = None
         self._poll_task = None
         self._polling_suspended = False
-        self._last_dimmer_update = None
+        self._last_control_update = None
         self._last_power_value = None
-        self._last_calculator_run = None
-        self._shelly_status = None
+        self._last_auto_update = None
+        self._device_status = None
+        self._system_status = None
         self._current_dimmer_percentage: int | None = None
-        self._dispatcher_signal = f"{DOMAIN}_{config_entry.entry_id}_shelly_status"
-        self._mode_signal = f"{DOMAIN}_{config_entry.entry_id}_dimming_mode"
-        self._manual_brightness_signal = f"{DOMAIN}_{config_entry.entry_id}_manual_brightness"
+        self._dispatcher_signal = f"{DOMAIN}_{config_entry.entry_id}_device_status"
+        self._mode_signal = f"{DOMAIN}_{config_entry.entry_id}_control_mode"
+        self._manual_watts_signal = f"{DOMAIN}_{config_entry.entry_id}_manual_watts"
         self._calibration_signal = f"{DOMAIN}_{config_entry.entry_id}_calibration_state"
-        
+
         # Configuration
-        self.shelly_url = config_entry.data[CONF_SHELLY_URL]
+        self.device_url = config_entry.data[CONF_DEVICE_URL]
         self.power_sensor_id = config_entry.data[CONF_P1_TOTAL_ENTITY]
-        self.shelly_client = ShellyClient(hass, self.shelly_url)
-        self._calculator = Calculator()
-        stored_mode = config_entry.options.get("dimming_mode", DIMMER_MODE_MANUAL)
-        self._dimming_mode = stored_mode if stored_mode in DIMMER_MODES else DIMMER_MODE_MANUAL
-        stored_manual = config_entry.options.get("manual_brightness", DEFAULT_MANUAL_BRIGHTNESS)
-        self._manual_brightness = max(MIN_MANUAL_BRIGHTNESS, min(100, int(stored_manual)))
-        self._calibration_store = CalibrationStore(hass, config_entry.entry_id)
-        self._calibration_profile: dict | None = None
+        self.device_client = BCClient(hass, self.device_url)
+
+        stored_mode = config_entry.options.get("control_mode", BOILER_MODE_OFF)
+        self._control_mode = stored_mode if stored_mode in BOILER_MODES else BOILER_MODE_OFF
+        stored_watts = config_entry.options.get("manual_watts", DEFAULT_MANUAL_WATTS)
+        self._manual_watts = max(0, min(MAX_EXPORT_WATTS, int(stored_watts)))
+
         self._calibration_lock = asyncio.Lock()
         self._calibration_active = False
         self._calibration_cancel_requested = False
-        # To restore mode after calibration
         self._calibration_previous_mode: str | None = None
-        
-        # Options
-        self.min_dimmer_value = DEFAULT_MIN_DIMMER_VALUE
-        self.max_dimmer_value = DEFAULT_MAX_DIMMER_VALUE
-        self._device_min_dimmer_value: int | None = None
-        self._device_max_dimmer_value: int | None = None
-        self._effective_min_dimmer_value = self.min_dimmer_value
-        self._effective_max_dimmer_value = self.max_dimmer_value
-        self.shelly_poll_interval = config_entry.options.get(
-            CONF_SHELLY_POLL_INTERVAL,
-            config_entry.data.get(CONF_SHELLY_POLL_INTERVAL, DEFAULT_SHELLY_POLL_INTERVAL)
+
+        self.poll_interval = config_entry.options.get(
+            CONF_POLL_INTERVAL,
+            config_entry.data.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
         )
-        
-        self._recompute_effective_dimmer_bounds()
-        
+
         _LOGGER.debug(
-            "Initialized BoilerController: Power Sensor=%s, Shelly URL=%s, throttle_interval=%ds, poll_interval=%ds",
+            "Initialized BoilerController: Power Sensor=%s, Device URL=%s, poll_interval=%ds",
             self.power_sensor_id,
-            self.shelly_url,
-            DEFAULT_CALCULATOR_MIN_INTERVAL,
-            self.shelly_poll_interval,
+            self.device_url,
+            self.poll_interval,
         )
 
     async def async_start(self):
         """Start the controller."""
         _LOGGER.info("Starting Boiler Controller")
-        
+
         # Validate entities exist (informational only, always continue)
         await self._validate_configuration()
 
-        # Test Shelly connection once at startup
-        if await self.shelly_client.async_test_connection():
-            _LOGGER.info("Shelly device reachable at %s", self.shelly_url)
-            await self._async_sync_shelly_dimmer_constraints()
-            await self._ensure_device_identity()
+        # Test BC device connection once at startup
+        if await self.device_client.async_test_connection():
+            _LOGGER.info("BC device reachable at %s", self.device_url)
         else:
-            _LOGGER.warning("Unable to reach Shelly device at %s during startup", self.shelly_url)
-
-        await self._async_load_calibration_profile()
+            _LOGGER.warning(
+                "Unable to reach BC device at %s during startup", self.device_url
+            )
 
         # Start listening to power sensor state changes
         self._cancel_listener = async_track_state_change_event(
             self.hass,
             [self.power_sensor_id],
-            self._async_power_sensor_changed
+            self._async_power_sensor_changed,
         )
-        _LOGGER.info("Started listening to power sensor state changes for: %s", self.power_sensor_id)
+        _LOGGER.info(
+            "Started listening to power sensor state changes for: %s",
+            self.power_sensor_id,
+        )
 
-        # Start Shelly polling task
-        self._poll_task = self.hass.loop.create_task(self._async_poll_shelly())
-        _LOGGER.info("Started Shelly polling task with interval %ss", self.shelly_poll_interval)
-        
+        # Start BC device polling task
+        self._poll_task = self.hass.loop.create_task(self._async_poll_device())
+        _LOGGER.info("Started device polling task with interval %ss", self.poll_interval)
+
         # Run initial update (will fail gracefully if entities don't exist yet)
         await self._async_update()
-        
+
         _LOGGER.info("Boiler Controller started successfully")
         return True
 
@@ -130,32 +117,29 @@ class BoilerController:
             _LOGGER.debug("Skipping power sensor update while calibration is active")
             return
 
-        now = dt_util.utcnow()
-        if self._last_calculator_run is not None:
-            elapsed = (now - self._last_calculator_run).total_seconds()
-            if elapsed < DEFAULT_CALCULATOR_MIN_INTERVAL:
-                return
-
         new_state = event.data.get("new_state")
         old_state = event.data.get("old_state")
-
-        if self._dimming_mode != DIMMER_MODE_AUTO:
-            _LOGGER.debug(
-                "Ignoring power sensor event while in manual mode: %s -> %s",
-                old_state.state if old_state else "None",
-                new_state.state if new_state else "None",
-            )
+        if new_state is None:
             return
 
-        if not new_state:
-            return
-            
+        # Throttle auto-mode updates to once per poll_interval
+        if self._control_mode == BOILER_MODE_AUTO:
+            now = dt_util.utcnow()
+            if self._last_auto_update is not None:
+                elapsed = (now - self._last_auto_update).total_seconds()
+                if elapsed < DEFAULT_POLL_INTERVAL:
+                    return
+
         # Skip if state hasn't actually changed or is unavailable
-        if (old_state and new_state.state == old_state.state) or new_state.state in ("unknown", "unavailable", "none"):
+        if (old_state and new_state.state == old_state.state) or new_state.state in (
+            "unknown",
+            "unavailable",
+            "none",
+        ):
             _LOGGER.debug("Skipping update - state unchanged or unavailable")
             return
-            
-        # Parse and validate the new power value first
+
+        # Parse and validate the new power value
         try:
             raw_power_value = float(new_state.state)
         except (ValueError, TypeError):
@@ -164,24 +148,23 @@ class BoilerController:
 
         unit = self._get_state_unit(new_state)
         new_power_value = self._normalize_power_unit(raw_power_value, unit)
-            
-        # Only update if power value actually changed significantly (more than 1W difference)
-        # TODO: Consider making this threshold configurable as the controller needs more than 200 watt to perform well
+
+        # Only update if power value actually changed significantly (>1 W)
         if self._last_power_value is not None and abs(new_power_value - self._last_power_value) < 1:
-            _LOGGER.debug("Skipping update - power change too small: %.1fW", abs(new_power_value - self._last_power_value))
+            _LOGGER.debug(
+                "Skipping update - power change too small: %.1fW",
+                abs(new_power_value - self._last_power_value),
+            )
             return
-            
-        # Store the new power value
+
         self._last_power_value = new_power_value
-            
         _LOGGER.debug(
             "Power sensor changed from %s %s to %.3f W (processing update)",
             old_state.state if old_state else "unknown",
             unit or "W",
             new_power_value,
         )
-        
-        # Update the controller with new power value
+
         await self._async_update()
 
     async def async_stop(self):
@@ -204,56 +187,74 @@ class BoilerController:
         # Check power sensor exists (informational only, don't block startup)
         power_state = self.hass.states.get(self.power_sensor_id)
         if not power_state:
-            _LOGGER.info("Power sensor %s not found yet - controller will start and wait for entity", self.power_sensor_id)
+            _LOGGER.info(
+                "Power sensor %s not found yet - controller will start and wait for entity",
+                self.power_sensor_id,
+            )
         else:
-            _LOGGER.info("Found power sensor: %s (current value: %s)", self.power_sensor_id, power_state.state)
-        
+            _LOGGER.info(
+                "Found power sensor: %s (current value: %s)",
+                self.power_sensor_id,
+                power_state.state,
+            )
+
         _LOGGER.info(
-            "Controller configured with power sensor: %s, Shelly URL: %s",
+            "Controller configured with power sensor: %s, Device URL: %s",
             self.power_sensor_id,
-            self.shelly_url,
+            self.device_url,
         )
-        
         return True
 
     async def _async_update(self, *args):
-        """Update the controller - read P1 data and adjust dimmer."""
+        """Update the controller - apply the current control mode."""
         if self._calibration_active:
             _LOGGER.debug("Calibration active - skipping automatic adjustment")
             return
 
         try:
             # Get current power consumption/production from P1
+            if self._control_mode == BOILER_MODE_OFF:
+                await self._set_heating_percentage(0, source=BOILER_MODE_OFF)
+                return
+
+            if self._control_mode == BOILER_MODE_ON:
+                await self._set_heating_percentage(100, source=BOILER_MODE_ON)
+                return
+
+            if self._control_mode == BOILER_MODE_MANUAL:
+                await self._apply_manual_watts()
+                return
+
+            # Auto mode: compute surplus watts from P1 + current boiler draw
             power_value = await self._get_p1_power_value()
             if power_value is None:
                 _LOGGER.debug("Could not read P1 power value - sensor may not be ready yet")
                 return
-                
+
             # Store the current power value
             self._last_power_value = power_value
-            _LOGGER.debug("Current P1 power value: %s W", power_value)
+            _LOGGER.debug("Current P1 power value: %.1f W", power_value)
 
-            if self._dimming_mode == DIMMER_MODE_MANUAL:
-                _LOGGER.debug("Manual dimmer mode active - skipping automatic adjustment")
-                return
-            
-            # Calculate dimmer percentage based on power value
-            dimmer_percentage = self._calculator.calculate(
+            # Available watts = solar surplus going to grid + what the boiler already draws.
+            # P1 negative → exporting to grid; adding boiler draw gives the true available budget.
+            boiler_watts = self._extract_boiler_consumption()
+            available_watts = max(0, min(MAX_EXPORT_WATTS, int(-power_value + boiler_watts)))
+
+            _LOGGER.debug(
+                "Auto mode: P1=%.1fW, boiler=%.1fW, available=%dW",
                 power_value,
-                self._effective_min_dimmer_value,
-                self._effective_max_dimmer_value,
-                boiler_consumption=self._extract_boiler_consumption(),
-                current_dimmer=self._extract_boiler_brightness(),
+                boiler_watts,
+                available_watts,
             )
 
-            # Update dimmer
-            await self._set_dimmer_percentage(dimmer_percentage, source=DIMMER_MODE_AUTO)
-            
+            # Update the device with the new target watts based on available surplus
+            await self.device_client.async_set_target_watts(available_watts)
+
             timestamp = dt_util.utcnow()
-            self._last_calculator_run = timestamp
-            self._last_dimmer_update = timestamp
-            
-        except Exception as err:
+            self._last_auto_update = timestamp
+            self._last_control_update = timestamp
+
+        except Exception as err:  # pylint: disable=broad-except
             _LOGGER.error("Error during controller update: %s", err)
 
     async def _get_p1_power_value(self) -> float | None:
@@ -263,104 +264,99 @@ class BoilerController:
             if not state:
                 # Only show this error occasionally, not every time
                 now = dt_util.utcnow()
-                if not hasattr(self, '_last_missing_sensor_log') or \
-                   (now - self._last_missing_sensor_log).total_seconds() > 60:
-                    _LOGGER.warning("Power sensor %s not found - check if entity exists", self.power_sensor_id)
+                if not hasattr(self, "_last_missing_sensor_log") or (
+                    now - self._last_missing_sensor_log
+                ).total_seconds() > 60:
+                    _LOGGER.warning(
+                        "Power sensor %s not found - check if entity exists",
+                        self.power_sensor_id,
+                    )
                     self._last_missing_sensor_log = now
                 return None
-                
+
             if state.state in ("unknown", "unavailable", "none"):
-                _LOGGER.debug("Power sensor %s is unavailable (state: %s)", self.power_sensor_id, state.state)
+                _LOGGER.debug(
+                    "Power sensor %s is unavailable (state: %s)",
+                    self.power_sensor_id,
+                    state.state,
+                )
                 return None
-                
+
             # Convert state to float and normalize units
             power_value = float(state.state)
             unit = self._get_state_unit(state)
             power_value = self._normalize_power_unit(power_value, unit)
+
             # Clear the missing sensor log timer since we got data
-            if hasattr(self, '_last_missing_sensor_log'):
-                delattr(self, '_last_missing_sensor_log')
+            if hasattr(self, "_last_missing_sensor_log"):
+                delattr(self, "_last_missing_sensor_log")
             return power_value
-            
+
         except (ValueError, TypeError) as err:
-            _LOGGER.warning("Error parsing power sensor value '%s': %s", state.state if state else "None", err)
+            _LOGGER.warning(
+                "Error parsing power sensor value '%s': %s",
+                state.state if state else "None",
+                err,
+            )
             return None
 
-    async def _async_poll_shelly(self):
-        """Poll Shelly status at the configured interval."""
+    async def _async_poll_device(self):
+        """Poll the BC device status and system info at the configured interval."""
         while True:
             try:
                 if not self._polling_suspended:
-                    status = await self.shelly_client.async_get_status()
+                    status = await self.device_client.async_get_status()
                     if status is not None:
-                        self._shelly_status = status
+                        self._device_status = status
                         self._update_cached_brightness(status)
                         async_dispatcher_send(self.hass, self._dispatcher_signal, status)
-                await asyncio.sleep(self.shelly_poll_interval)
+
+                    system = await self.device_client.async_get_system()
+                    if system is not None:
+                        self._system_status = system
+
+                await asyncio.sleep(self.poll_interval)
             except asyncio.CancelledError:
-                _LOGGER.debug("Shelly polling task cancelled")
+                _LOGGER.debug("Device polling task cancelled")
                 break
             except Exception as err:  # pylint: disable=broad-except
-                _LOGGER.error("Unexpected Shelly polling error: %s", err)
-                await asyncio.sleep(self.shelly_poll_interval)
+                _LOGGER.error("Unexpected device polling error: %s", err)
+                await asyncio.sleep(self.poll_interval)
 
-    async def _async_refresh_shelly_status(self):
-        """Force a Shelly status refresh outside the poll loop."""
+    async def _async_refresh_device_status(self):
+        """Force a device status refresh outside the poll loop."""
         try:
-            status = await self.shelly_client.async_get_status()
+            status = await self.device_client.async_get_status()
             if status is None:
                 return
-            self._shelly_status = status
+            self._device_status = status
             self._update_cached_brightness(status)
             async_dispatcher_send(self.hass, self._dispatcher_signal, status)
         except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.debug("Manual Shelly status refresh failed: %s", err)
+            _LOGGER.debug("Manual device status refresh failed: %s", err)
 
-    async def _set_dimmer_percentage(self, percentage: int, *, source: str = DIMMER_MODE_AUTO):
-        """Set the dimmer to the specified percentage using Shelly API."""
+    async def _set_heating_percentage(self, percentage: int, *, source: str = BOILER_MODE_AUTO):
+        """Set heating percentage on the BC device."""
+        if source == BOILER_MODE_MANUAL:
+            context = "manual override"
+        elif source == "calibration":
+            context = "calibration"
+        elif source == BOILER_MODE_ON:
+            context = "always on"
+        elif source == BOILER_MODE_OFF:
+            context = "always off"
+        else:
+            context = "auto calculation"
+
+        clamped = max(0, min(100, int(percentage)))
+        _LOGGER.info("BC heating request (%s): set to %s%%", context, clamped)
         try:
-            if source == DIMMER_MODE_MANUAL:
-                context = "manual override"
-            elif source == "calibration":
-                context = "calibration"
-            else:
-                context = "auto calculation"
-            if percentage <= 0:
-                _LOGGER.info("Shelly dimmer request (%s): turn off (requested %s%%)", context, percentage)
-                set_success = await self.shelly_client.async_set_brightness(0)
-                if not set_success:
-                    _LOGGER.warning("Failed to set Shelly dimmer to 0%% before turn off")
-                success = await self.shelly_client.async_turn_off()
-                self._current_dimmer_percentage = 0
-                if success:
-                    _LOGGER.debug("Shelly dimmer turned off")
-                else:
-                    _LOGGER.warning("Failed to turn off Shelly dimmer")
-                _LOGGER.info("Shelly dimmer turn_off success=%s", success)
-            else:
-                desired_percentage = max(1, percentage)
-                if source == DIMMER_MODE_MANUAL:
-                    _LOGGER.info(
-                        "Shelly dimmer request (%s): set to %s%%",
-                        context,
-                        desired_percentage,
-                    )
-                else:
-                    _LOGGER.info(
-                        "Shelly dimmer request (%s): set to %s%% (effective range %s-%s%%)",
-                        context,
-                        desired_percentage,
-                        self._effective_min_dimmer_value,
-                        self._effective_max_dimmer_value,
-                    )
-                success = await self.shelly_client.async_set_brightness(desired_percentage)
-                self._current_dimmer_percentage = desired_percentage
-                if success:
-                    _LOGGER.debug("Shelly dimmer set to %s%%", desired_percentage)
-                else:
-                    _LOGGER.warning("Failed to set Shelly dimmer to %s%%", desired_percentage)
+            success = await self.device_client.async_set_heating_percentage(clamped)
+            self._current_dimmer_percentage = clamped
+            if not success:
+                _LOGGER.warning("Failed to set BC heating to %s%%", clamped)
         except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.error("Error setting Shelly dimmer percentage: %s", err)
+            _LOGGER.error("Error setting BC heating percentage: %s", err)
 
     @property
     def device_info(self):
@@ -370,288 +366,201 @@ class BoilerController:
         return {
             "identifiers": {(DOMAIN, self.config_entry.entry_id)},
             "name": self.config_entry.title,
-            "manufacturer": "Boiler Controller",
-            "model": "P1 to Dimmer Controller",
+            "manufacturer": "Powerbaas",
+            "model": "Boiler Controller",
             "sw_version": str(version),
         }
 
     def get_status(self):
         """Get current controller status."""
-        profile = self._calibration_profile or {}
         return {
-            "last_dimmer_update": self._last_dimmer_update,
+            "last_control_update": self._last_control_update,
             "last_power_value": self._last_power_value,
             "power_sensor": self.power_sensor_id,
-            "shelly_url": self.shelly_url,
-            "shelly_status": self._shelly_status,
+            "device_url": self.device_url,
+            "device_status": self._device_status,
+            "system_status": self._system_status,
             "update_method": "event_driven",
-            "calculator_min_interval": DEFAULT_CALCULATOR_MIN_INTERVAL,
-            "shelly_poll_interval": self.shelly_poll_interval,
-            "min_dimmer": self.min_dimmer_value,
-            "max_dimmer": self.max_dimmer_value,
-            "device_min_dimmer": self._device_min_dimmer_value,
-            "device_max_dimmer": self._device_max_dimmer_value,
-            "effective_min_dimmer": self._effective_min_dimmer_value,
-            "effective_max_dimmer": self._effective_max_dimmer_value,
-            "dimming_mode": self._dimming_mode,
-            "manual_brightness": self._manual_brightness,
+            "poll_interval": self.poll_interval,
+            "control_mode": self._control_mode,
+            "manual_watts": self._manual_watts,
             "calibration_active": self._calibration_active,
-            "calibration_points": len(profile.get("points", [])) if profile else 0,
-            "calibration_created": profile.get("created") if profile else None,
         }
 
-    def get_shelly_status(self):
-        """Expose latest Shelly polling data."""
-        return self._shelly_status
+    def get_device_status(self):
+        """Expose latest device polling data (/api/status)."""
+        return self._device_status
 
-    def get_calibration_profile(self):
-        """Return the active calibration profile, if any."""
-        return self._calibration_profile
+    def get_system_status(self):
+        """Expose latest system info (/api/system)."""
+        return self._system_status
 
     def get_shelly_status_signal(self):
-        """Return dispatcher signal name for Shelly status updates."""
+        """Return dispatcher signal name for device status updates."""
         return self._dispatcher_signal
 
-    def get_dimming_mode_signal(self):
-        """Dispatcher signal for dimming mode changes."""
+    def get_control_mode_signal(self):
+        """Dispatcher signal for control mode changes."""
         return self._mode_signal
 
-    def get_manual_brightness_signal(self):
-        """Dispatcher signal for manual brightness changes."""
-        return self._manual_brightness_signal
+    def get_manual_watts_signal(self):
+        """Dispatcher signal for manual watts changes."""
+        return self._manual_watts_signal
 
     def get_calibration_state_signal(self):
         """Dispatcher signal fired when calibration state changes."""
         return self._calibration_signal
 
     @property
-    def dimming_mode(self) -> str:
-        return self._dimming_mode
+    def control_mode(self) -> str:
+        return self._control_mode
 
     @property
-    def manual_brightness(self) -> int:
-        return self._manual_brightness
+    def manual_watts(self) -> int:
+        return self._manual_watts
 
     @property
     def is_calibration_active(self) -> bool:
-        """Return True if a calibration sweep is currently running."""
+        """Return True if a calibration run is currently in progress."""
         return self._calibration_active
 
     async def async_request_calibration_cancel(self) -> bool:
         """Signal the active calibration run to stop after the current step."""
         if not self._calibration_active:
             return False
-        if self._calibration_cancel_requested:
-            return True
         self._calibration_cancel_requested = True
+        ok = await self.device_client.async_calibration_stop()
         _LOGGER.info(
-            "Calibration cancellation requested for %s",
+            "Calibration stop requested for %s (device accepted: %s)",
             self.config_entry.title,
+            ok,
         )
         return True
 
-    async def async_set_dimming_mode(self, mode: str):
-        """Set dimming mode to auto or manual."""
+    async def async_set_control_mode(self, mode: str):
+        """Set control mode (auto, manual, on, off)."""
         if self._calibration_active:
-            raise RuntimeError("Cannot change dimming mode during calibration")
-        if mode not in (DIMMER_MODE_AUTO, DIMMER_MODE_MANUAL):
-            raise ValueError(f"Unsupported dimming mode: {mode}")
-        if mode == self._dimming_mode:
+            raise RuntimeError("Cannot change control mode during calibration")
+        if mode not in BOILER_MODES:
+            raise ValueError(f"Unsupported control mode: {mode}")
+        if mode == self._control_mode:
             return
-
-        self._dimming_mode = mode
-        self._persist_controller_options(dimming_mode=mode)
+        self._control_mode = mode
+        self._persist_controller_options(control_mode=mode)
         async_dispatcher_send(self.hass, self._mode_signal, mode)
+        await self._async_update()
 
-        if mode == DIMMER_MODE_MANUAL:
-            await self._apply_manual_brightness()
-        else:
-            await self._async_update()
-
-    async def async_set_manual_brightness(self, brightness: int):
-        """Store manual brightness and apply when manual mode is active."""
+    async def async_set_manual_watts(self, watts: int):
+        """Store manual target watts and apply when manual mode is active."""
         if self._calibration_active:
-            raise RuntimeError("Cannot change manual brightness during calibration")
-        brightness = max(MIN_MANUAL_BRIGHTNESS, min(100, int(brightness)))
-        if brightness == self._manual_brightness:
+            raise RuntimeError("Cannot change manual watts during calibration")
+        watts = max(0, min(MAX_EXPORT_WATTS, int(watts)))
+        if watts == self._manual_watts:
             return
-        self._manual_brightness = brightness
-        self._persist_controller_options(manual_brightness=self._manual_brightness)
-        async_dispatcher_send(self.hass, self._manual_brightness_signal, brightness)
+        self._manual_watts = watts
+        self._persist_controller_options(manual_watts=self._manual_watts)
+        async_dispatcher_send(self.hass, self._manual_watts_signal, watts)
+        if self._control_mode == BOILER_MODE_MANUAL:
+            await self._apply_manual_watts()
 
-        if self._dimming_mode == DIMMER_MODE_MANUAL:
-            await self._apply_manual_brightness()
+    async def _apply_manual_watts(self):
+        """Send the stored manual target watts to the device."""
+        _LOGGER.debug("Applying manual power override: %sW", self._manual_watts)
+        success = await self.device_client.async_set_target_watts(self._manual_watts)
+        if success:
+            self._last_control_update = dt_util.utcnow()
+        await self._async_refresh_device_status()
 
-    async def _apply_manual_brightness(self):
-        """Apply the stored manual brightness to the Shelly device."""
-        _LOGGER.debug("Applying manual brightness override: %s%%", self._manual_brightness)
-        await self._set_dimmer_percentage(self._manual_brightness, source=DIMMER_MODE_MANUAL)
-        self._last_dimmer_update = dt_util.utcnow()
-        await self._async_refresh_shelly_status()
-
-    async def async_run_calibration(
-        self,
-        *,
-        min_percentage: int,
-        max_percentage: int,
-        step_percentage: int,
-        settle_seconds: float,
-    ) -> dict | None:
-        """Drive the Shelly through a sweep to learn watts per brightness level."""
-
-        if min_percentage > max_percentage:
-            raise ValueError("min_percentage must be <= max_percentage")
-        if step_percentage <= 0:
-            raise ValueError("step_percentage must be greater than zero")
-
-        settle_delay = max(1.0, float(settle_seconds))
-        percentages = list(range(min_percentage, max_percentage + 1, step_percentage))
-        if percentages[-1] != max_percentage:
-            percentages.append(max_percentage)
-
-        if not percentages:
-            raise ValueError("No calibration points requested")
-
+    async def async_run_calibration(self) -> None:
+        """Start an automated calibration run on the device and wait for completion."""
         if self._calibration_lock.locked():
             raise RuntimeError("A calibration run is already in progress")
 
-        measurements: list[dict[str, float | int]] = []
         async with self._calibration_lock:
             self._set_calibration_active(True)
             self._calibration_cancel_requested = False
-            cancelled = False
             self._enter_calibration_mode()
-            self._suspend_polling()
             try:
-                for percentage in percentages:
-                    if self._calibration_cancel_requested:
-                        cancelled = True
-                        break
-                    await self._set_dimmer_percentage(percentage, source="calibration")
-                    await asyncio.sleep(settle_delay)
-                    if self._calibration_cancel_requested:
-                        cancelled = True
-                        break
-                    watts = await self._async_measure_boiler_power()
-                    measurements.append({"percentage": percentage, "watts": watts})
-                    _LOGGER.info(
-                        "Calibration sample: %s%% -> %.2f W",
-                        percentage,
-                        watts,
+                ok = await self.device_client.async_calibration_run()
+                if not ok:
+                    _LOGGER.warning(
+                        "Device rejected calibration start for %s",
+                        self.config_entry.title,
                     )
+                    return
 
-                    if self._calibration_cancel_requested:
-                        cancelled = True
-                        break
-
-                if cancelled:
-                    _LOGGER.info(
-                        "Calibration cancelled after recording %s samples",
-                        len(measurements),
-                    )
-                    return None
-
-                profile = await self._calibration_store.async_save_points(measurements)
-                self._apply_calibration_profile(profile)
-                detail_lines = [
-                    f"  - {point['percentage']}% -> {point['watts']:.2f} W"
-                    for point in measurements
-                ]
                 _LOGGER.info(
-                    "Calibration finished (%s points recorded):\n%s",
-                    len(profile.get("points", [])),
-                    "\n".join(detail_lines),
+                    "Calibration started on device for %s - polling for completion",
+                    self.config_entry.title,
                 )
-                return profile
+
+                seen_running = False
+                while True:
+                    await asyncio.sleep(CALIBRATION_POLL_SECONDS)
+                    cal_data = await self.device_client.async_get_calibration()
+                    if cal_data is None:
+                        _LOGGER.warning("Lost contact with device during calibration")
+                        break
+
+                    run = cal_data.get("run", {})
+                    state = run.get("state", "idle")
+                    _LOGGER.debug(
+                        "Calibration poll: state=%s step=%s percent=%s watts=%s",
+                        state,
+                        run.get("step"),
+                        run.get("currentPercent"),
+                        run.get("lastSampleWatts"),
+                    )
+
+                    # state values per API: "idle", "running", "done"
+                    if state == "running":
+                        seen_running = True
+
+                    # Exit on "done", or on "idle" after having seen "running"
+                    # (idle is also the initial state before calibration begins)
+                    if state == "done" or (seen_running and state == "idle"):
+                        _LOGGER.info("Calibration completed for %s", self.config_entry.title)
+                        break
+
+                    if run.get("error"):
+                        _LOGGER.error("Calibration error from device: %s", run["error"])
+                        break
+
+                    if self._calibration_cancel_requested:
+                        break
+
             finally:
                 self._calibration_cancel_requested = False
                 self._set_calibration_active(False)
-                await self._set_dimmer_percentage(0, source="calibration")
-                await self._async_refresh_shelly_status()
-                self._resume_polling()
-                restored_mode = self._exit_calibration_mode()
-                if restored_mode == DIMMER_MODE_AUTO:
-                    await self._async_update()
-                else:
-                    await self._apply_manual_brightness()
+                self._exit_calibration_mode()
+                await self._async_refresh_device_status()
+                await self._async_update()
 
     def _extract_boiler_consumption(self) -> float:
-        """Return the latest Shelly-reported consumption in watts."""
-        status = self._shelly_status or {}
-        if not status:
-            return 0.0
-        value = status.get("apower", status.get("power"))
+        """Return the latest device-reported boiler power in watts."""
+        status = self._device_status or {}
         try:
-            return float(value)
+            return float(status.get("power", 0))
         except (TypeError, ValueError):
             return 0.0
 
     def _update_cached_brightness(self, status: dict | None) -> None:
-        """Cache the brightness reported by the Shelly status payload."""
-
+        """Cache the heating percentage reported by the device status."""
         if not status:
             return
-        brightness = status.get("brightness", status.get("gain"))
-        if brightness is None:
+        value = status.get("heatingPercentage")
+        if value is None:
             return
         try:
-            parsed = max(0, min(100, int(brightness)))
+            parsed = max(0, min(100, int(value)))
         except (TypeError, ValueError):
             return
         self._current_dimmer_percentage = parsed
-
-    def _extract_boiler_brightness(self) -> int | None:
-        """Return the latest known dimmer percentage for the boiler."""
-
-        if self._shelly_status:
-            self._update_cached_brightness(self._shelly_status)
-        return self._current_dimmer_percentage
-
-    async def _async_measure_boiler_power(self) -> float:
-        """Force a Shelly status fetch and return the current power draw."""
-        status = await self.shelly_client.async_get_status()
-        if status is None:
-            return 0.0
-
-        self._shelly_status = status
-        self._update_cached_brightness(status)
-        async_dispatcher_send(self.hass, self._dispatcher_signal, status)
-
-        value = status.get("apower", status.get("power"))
-        try:
-            return max(0.0, float(value))
-        except (TypeError, ValueError):
-            return 0.0
-
-    async def _ensure_device_identity(self) -> None:
-        """Persist the Shelly device identifier on the config entry when missing."""
-        if self.config_entry.data.get(CONF_SHELLY_ID):
-            return
-
-        device_info = await self.shelly_client.async_get_device_info()
-        if not device_info:
-            _LOGGER.debug("Shelly device info unavailable for %s", self.shelly_url)
-            return
-
-        device_id = ShellyClient.extract_device_id(device_info)
-        if not device_id:
-            _LOGGER.debug("Shelly device info missing identifier for %s", self.shelly_url)
-            return
-
-        new_data = dict(self.config_entry.data)
-        new_data[CONF_SHELLY_ID] = device_id
-        self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
-        _LOGGER.info(
-            "Stored Shelly device id %s for entry %s",
-            device_id,
-            self.config_entry.entry_id,
-        )
 
     def _persist_controller_options(self, **updates):
         """Store controller runtime preferences in the config entry options."""
         if not updates:
             return
-
         new_options = dict(self.config_entry.options)
         changed = False
         for key, value in updates.items():
@@ -661,183 +570,47 @@ class BoilerController:
                 continue
             new_options[key] = value
             changed = True
-
         if changed:
             self.hass.config_entries.async_update_entry(
-                self.config_entry,
-                options=new_options,
+                self.config_entry, options=new_options
             )
-
-    async def _async_sync_shelly_dimmer_constraints(self):
-        """Fetch Shelly light config to honor hardware brightness bounds."""
-        config = await self.shelly_client.async_get_light_config()
-        if not config:
-            _LOGGER.debug("Could not load Shelly light config; using user dimmer bounds")
-            return
-
-        device_min = self._extract_brightness_limit(config, limit_type="min")
-        device_max = self._extract_brightness_limit(config, limit_type="max")
-
-        if device_min is not None:
-            self._device_min_dimmer_value = max(0, min(100, device_min))
-        if device_max is not None:
-            self._device_max_dimmer_value = max(0, min(100, device_max))
-
-        self._recompute_effective_dimmer_bounds()
-
-    def _recompute_effective_dimmer_bounds(self):
-        """Intersect user preferences with Shelly limits to get the enforceable range.
-
-        The controller never sends a brightness outside this window, so this method
-        re-evaluates the currently valid minimum and maximum whenever either the
-        user-configured bounds or the device-reported constraints change.
-        """
-
-        new_min = self.min_dimmer_value  # Start from the configured preference
-        if self._device_min_dimmer_value is not None:
-            new_min = max(new_min, self._device_min_dimmer_value)
-
-        new_max = self.max_dimmer_value  # Start from the configured preference
-        if self._device_max_dimmer_value is not None:
-            new_max = min(new_max, self._device_max_dimmer_value)
-
-        if new_max < new_min:
-            new_max = new_min
-
-        if (new_min != self._effective_min_dimmer_value) or (new_max != self._effective_max_dimmer_value):
-            _LOGGER.info(
-                "Effective dimmer bounds updated: min=%s%%, max=%s%% (user min=%s%%, user max=%s%%, device min=%s%%, device max=%s%%)",
-                new_min,
-                new_max,
-                self.min_dimmer_value,
-                self.max_dimmer_value,
-                self._device_min_dimmer_value,
-                self._device_max_dimmer_value,
-            )
-
-        self._effective_min_dimmer_value = new_min
-        self._effective_max_dimmer_value = new_max
-
-    @staticmethod
-    def _extract_brightness_limit(config: dict, *, limit_type: str) -> int | None:
-        """Search Shelly config for brightness min/max values."""
-        assert limit_type in {"min", "max"}
-        matches: list[int] = []
-
-        def _search(node):
-            if isinstance(node, dict):
-                for key, value in node.items():
-                    key_lower = key.lower()
-                    if "bright" in key_lower and limit_type in key_lower and isinstance(value, (int, float)):
-                        matches.append(int(value))
-                    else:
-                        _search(value)
-            elif isinstance(node, list):
-                for item in node:
-                    _search(item)
-
-        _search(config)
-
-        if not matches:
-            return None
-
-        return min(matches) if limit_type == "min" else max(matches)
 
     def _enter_calibration_mode(self) -> None:
-        """Temporarily suspend auto mode while calibration is running."""
+        """Switch to manual mode for the duration of calibration."""
+        self._calibration_previous_mode = self._control_mode
+        if self._control_mode not in (BOILER_MODE_OFF, BOILER_MODE_MANUAL):
+            self._control_mode = BOILER_MODE_OFF
+            async_dispatcher_send(self.hass, self._mode_signal, BOILER_MODE_OFF)
 
-        if self._calibration_previous_mode is not None:
-            return
-
-        self._calibration_previous_mode = self._dimming_mode
-        if self._dimming_mode == DIMMER_MODE_AUTO:
-            self._dimming_mode = DIMMER_MODE_MANUAL
-            async_dispatcher_send(self.hass, self._mode_signal, self._dimming_mode)
-
-    def _exit_calibration_mode(self) -> str | None:
-        """Restore the dimming mode that was active before calibration started."""
-
-        if self._calibration_previous_mode is None:
-            return None
-
-        previous_mode = self._calibration_previous_mode
+    def _exit_calibration_mode(self) -> None:
+        """Restore the control mode that was active before calibration."""
+        restored = self._calibration_previous_mode or BOILER_MODE_OFF
+        self._control_mode = restored
         self._calibration_previous_mode = None
-
-        if self._dimming_mode != previous_mode:
-            self._dimming_mode = previous_mode
-            async_dispatcher_send(self.hass, self._mode_signal, self._dimming_mode)
-
-        return previous_mode
+        async_dispatcher_send(self.hass, self._mode_signal, restored)
 
     def _suspend_polling(self) -> None:
-        """Pause the Shelly polling loop while calibration owns the device."""
-
-        if self._polling_suspended:
-            return
-
         self._polling_suspended = True
-        _LOGGER.debug("Shelly polling suspended for calibration")
 
     def _resume_polling(self) -> None:
-        """Resume the Shelly polling loop after calibration completes."""
-
-        if not self._polling_suspended:
-            return
-
         self._polling_suspended = False
-        _LOGGER.debug("Shelly polling resumed after calibration")
 
     def _set_calibration_active(self, active: bool) -> None:
-        """Toggle calibration flag and broadcast state changes."""
-        previous = self._calibration_active
         self._calibration_active = active
-        if previous != active:
-            async_dispatcher_send(self.hass, self._calibration_signal, active)
-
-    async def _async_load_calibration_profile(self) -> None:
-        """Load a stored calibration profile from disk and apply it."""
-        try:
-            profile = await self._calibration_store.async_load_profile()
-        except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.warning("Failed to load calibration profile: %s", err)
-            profile = None
-
-        self._apply_calibration_profile(profile)
-        if profile:
-            _LOGGER.info(
-                "Loaded calibration profile with %s points",
-                len(profile.get("points", [])),
-            )
-
-    def _apply_calibration_profile(self, profile: dict | None) -> None:
-        """Install the provided calibration profile or fall back to defaults."""
-
-        self._calibration_profile = profile
-        points = profile.get("points", []) if profile else []
-        thresholds = points_to_thresholds(points)
-        self._calculator.set_calibration_profile(thresholds if thresholds else None)
+        async_dispatcher_send(self.hass, self._calibration_signal, active)
 
     @staticmethod
     def _get_state_unit(state) -> str:
-        """Fetch unit from state attributes, falling back to native unit."""
-        if not state:
-            return ""
         unit = state.attributes.get("unit_of_measurement")
         if not unit:
             unit = state.attributes.get("native_unit_of_measurement")
-        if isinstance(unit, str):
-            return unit
-        return str(unit) if unit is not None else ""
+        return str(unit).strip() if unit else ""
 
     @staticmethod
     def _normalize_power_unit(power_value: float, unit: str) -> float:
-        """Convert incoming power readings to watts."""
         if not unit:
             return power_value
-
         cleaned = unit.strip().lower()
-        # Handle variations like kW, kilo watt, kilowatt, etc.
         if cleaned.startswith("kw") or "kilowatt" in cleaned:
             return power_value * 1000
-        # No conversion needed for W-based units
         return power_value
