@@ -25,7 +25,7 @@ BOILER_MODE_CALIBRATING = "calibrating"
 BOILER_MODES = [BOILER_MODE_AUTO, BOILER_MODE_MANUAL, BOILER_MODE_ON, BOILER_MODE_OFF]
 
 # Manual mode defaults
-DEFAULT_MANUAL_WATTS = 500
+DEFAULT_MANUAL_WATTS = 0
 
 # Seconds between device status polls (updates all sensor values)
 DEFAULT_POLL_INTERVAL = 10
@@ -39,4 +39,4 @@ ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 CALIBRATION_POLL_SECONDS = 5
 
 # Safety limits
-MAX_EXPORT_WATTS = 2200
+MAX_EXPORT_WATTS = 3500
