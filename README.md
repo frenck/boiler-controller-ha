@@ -48,7 +48,7 @@ To abort a running calibration press **Calibrate Stop**.
 | Entity | Type | Description |
 | --- | --- | --- |
 | **Control Mode** | Select | Active control mode: `auto`, `manual`, `on`, `off`. Disabled during calibration. |
-| **Manual Power** | Number (W) | Target wattage used in `manual` mode (0–2200 W). Only available in `manual` mode. |
+| **Manual Power** | Number (W) | Target wattage used in `manual` mode. Only available in `manual` mode. |
 | **Calibrate Start** | Button | Starts an automated calibration run on the BC device. |
 | **Calibrate Stop** | Button | Requests the active calibration run to stop. |
 
@@ -61,7 +61,7 @@ To abort a running calibration press **Calibrate Stop**.
 | **Last Control Update** | Sensor (timestamp) | Timestamp of the last heating command sent to the device. |
 | **Device Power** | Sensor (W) | Live power draw reported by the BC device. |
 | **Heating Percentage** | Sensor (%) | Current output percentage reported by the BC device. |
-| **Device Temperature** | Sensor (°C) | Boiler temperature reported by the BC device. |
+| **Device Temperature** | Sensor (°C) | External temperature sensor (I/O) reported by the BC device. |
 | **Device Energy** | Sensor (kWh) | Cumulative energy consumed by the boiler. |
 | **Firmware Version** | Sensor | BC device firmware version. |
 | **IP Address** | Sensor | IP address of the BC device. |
