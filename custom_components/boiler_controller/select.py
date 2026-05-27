@@ -85,12 +85,10 @@ class BoilerControllerModeSelect(SelectEntity):
 
     @property
     def device_info(self):
-        from .const import VERSION as DEFAULT_VERSION
-        version = self.controller.integration_version if self.controller.integration_version else DEFAULT_VERSION
         return {
             "identifiers": {(DOMAIN, self.config_entry.entry_id)},
             "name": self.config_entry.title,
             "manufacturer": "Powerbaas",
             "model": "Boiler Controller",
-            "sw_version": str(version),
+            "sw_version": str(self.controller.integration_version),
         }

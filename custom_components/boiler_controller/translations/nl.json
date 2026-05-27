@@ -10,9 +10,10 @@
       },
       "power_sensor": {
         "title": "Selecteer Vermogen Sensor",
-        "description": "Kies de sensor die huidige vermogen verbruik/productie gegevens levert (in Watts)",
+        "description": "Kies hoe teruglevering naar het net wordt gerapporteerd. Je hebt of een aparte retour sensor die altijd positief is, of één netto vermogen sensor die negatief wordt bij teruglevering.",
         "data": {
-          "p1_total_entity": "Vermogen Sensor"
+          "power_sensor_type": "Type vermogen sensor",
+          "power_sensor": "Vermogen sensor entiteit"
         }
       },
       "device_config": {
@@ -27,6 +28,7 @@
       "no_power_sensors": "Geen vermogen sensoren gevonden in Home Assistant",
       "entity_not_found": "De geselecteerde entiteit werd niet gevonden",
       "invalid_url": "Geef een geldige http(s) URL op",
+      "invalid_sensor_type": "Kies of een retour sensor of een netto vermogen sensor",
       "cannot_connect": "Kan geen verbinding maken met de BC module",
       "cannot_identify": "Kan het module ID niet bepalen",
       "device_in_use": "Deze module is al geconfigureerd"
@@ -40,16 +42,17 @@
     "step": {
       "init": {
         "title": "Boiler Controller Opties",
-        "description": "Wijzig de vermogenssensor of BC module die deze controller gebruikt",
+        "description": "Wijzig de vermogen sensor of BC module die deze controller gebruikt",
         "data": {
-          "change_devices": "Wijzig vermogenssensor of apparaatinstellingen"
+          "change_devices": "Wijzig vermogen sensor of apparaatinstellingen"
         }
       },
       "power_sensor": {
-        "title": "Selecteer Nieuwe Stroommeter",
-        "description": "Kies een nieuwe sensor die huidige stroomverbruik/productie data levert (in Watts)",
+        "title": "Selecteer Nieuwe Vermogen Sensor",
+        "description": "Kies hoe teruglevering naar het net wordt gerapporteerd. Je hebt of een aparte retour sensor die altijd positief is, of één netto vermogen sensor die negatief wordt bij teruglevering.",
         "data": {
-          "p1_total_entity": "Stroommeter"
+          "power_sensor_type": "Type vermogen sensor",
+          "power_sensor": "Vermogen sensor entiteit"
         }
       },
       "device_config": {

@@ -32,18 +32,13 @@ CANCEL_CALIBRATION_SCHEMA = ENTRY_ID_SCHEMA
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Boiler Controller from a config entry."""
     _LOGGER.info("Setting up Boiler Controller")
-    
-    from .const import VERSION
-    
+
     try:
         integration = await async_get_integration(hass, DOMAIN)
-        integration_version = integration.version
+        integration_version = str(integration.version) if integration.version else "unknown"
     except Exception as err:  # pylint: disable=broad-except
-        _LOGGER.warning("Could not get integration version: %s, using fallback", err)
-        integration_version = None
-    
-    # Ensure we always have a valid version string
-    integration_version = str(integration_version) if integration_version else VERSION
+        _LOGGER.warning("Could not get integration version from manifest: %s", err)
+        integration_version = "unknown"
 
     # Create the controller
     controller = BoilerController(hass, entry, integration_version)

@@ -8,7 +8,11 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
-    CONF_P1_TOTAL_ENTITY,
+    CONF_POWER_SENSOR,
+    CONF_POWER_SENSOR_TYPE,
+    POWER_SENSOR_TYPE_RETURN,
+    POWER_SENSOR_TYPE_NET,
+    POWER_SENSOR_TYPES,
     CONF_DEVICE_URL,
     CONF_POLL_INTERVAL,
     DEFAULT_POLL_INTERVAL,
@@ -49,7 +53,14 @@ class BoilerController:
 
         # Configuration
         self.device_url = config_entry.data[CONF_DEVICE_URL]
-        self.power_sensor_id = config_entry.data[CONF_P1_TOTAL_ENTITY]
+        # Source sensor for the grid-return calculation. Two flavours are supported:
+        #   - POWER_SENSOR_TYPE_RETURN: sensor value is always >= 0 (Watts exported).
+        #   - POWER_SENSOR_TYPE_NET:    signed sensor where negative values indicate export.
+        self.power_sensor_id = config_entry.data[CONF_POWER_SENSOR]
+        sensor_type = config_entry.data.get(CONF_POWER_SENSOR_TYPE, POWER_SENSOR_TYPE_RETURN)
+        self.power_sensor_type = (
+            sensor_type if sensor_type in POWER_SENSOR_TYPES else POWER_SENSOR_TYPE_RETURN
+        )
         self.device_client = BCClient(hass, self.device_url)
 
         stored_mode = config_entry.options.get("control_mode", BOILER_MODE_OFF)
@@ -68,8 +79,9 @@ class BoilerController:
         )
 
         _LOGGER.debug(
-            "Initialized BoilerController: Power Sensor=%s, Device URL=%s, poll_interval=%ds",
+            "Initialized BoilerController: Power Sensor=%s (type=%s), Device URL=%s, poll_interval=%ds",
             self.power_sensor_id,
+            self.power_sensor_type,
             self.device_url,
             self.poll_interval,
         )
@@ -96,8 +108,9 @@ class BoilerController:
             self._async_power_sensor_changed,
         )
         _LOGGER.info(
-            "Started listening to power sensor state changes for: %s",
+            "Started listening to power sensor state changes for: %s (type=%s)",
             self.power_sensor_id,
+            self.power_sensor_type,
         )
 
         # Start BC device polling task
@@ -147,7 +160,8 @@ class BoilerController:
             return
 
         unit = self._get_state_unit(new_state)
-        new_power_value = self._normalize_power_unit(raw_power_value, unit)
+        raw_power_value = self._normalize_power_unit(raw_power_value, unit)
+        new_power_value = self._derive_return_value(raw_power_value)
 
         # Only update if power value actually changed significantly (>1 W)
         if self._last_power_value is not None and abs(new_power_value - self._last_power_value) < 1:
@@ -159,9 +173,10 @@ class BoilerController:
 
         self._last_power_value = new_power_value
         _LOGGER.debug(
-            "Power sensor changed from %s %s to %.3f W (processing update)",
+            "Power sensor changed from %s %s to raw %.3f W -> return %.3f W (processing update)",
             old_state.state if old_state else "unknown",
             unit or "W",
+            raw_power_value,
             new_power_value,
         )
 
@@ -183,24 +198,26 @@ class BoilerController:
 
     async def _validate_configuration(self) -> bool:
         """Validate that all configured entities exist."""
-        
+
         # Check power sensor exists (informational only, don't block startup)
-        power_state = self.hass.states.get(self.power_sensor_id)
-        if not power_state:
+        sensor_state = self.hass.states.get(self.power_sensor_id)
+        if not sensor_state:
             _LOGGER.info(
                 "Power sensor %s not found yet - controller will start and wait for entity",
                 self.power_sensor_id,
             )
         else:
             _LOGGER.info(
-                "Found power sensor: %s (current value: %s)",
+                "Found power sensor: %s (type=%s, current value: %s)",
                 self.power_sensor_id,
-                power_state.state,
+                self.power_sensor_type,
+                sensor_state.state,
             )
 
         _LOGGER.info(
-            "Controller configured with power sensor: %s, Device URL: %s",
+            "Controller configured with power sensor: %s (type=%s), Device URL: %s",
             self.power_sensor_id,
+            self.power_sensor_type,
             self.device_url,
         )
         return True
@@ -225,24 +242,24 @@ class BoilerController:
                 await self._apply_manual_watts()
                 return
 
-            # Auto mode: compute surplus watts from P1 + current boiler draw
-            power_value = await self._get_p1_power_value()
-            if power_value is None:
-                _LOGGER.debug("Could not read P1 power value - sensor may not be ready yet")
+            # Auto mode: compute surplus watts from grid return + current boiler draw
+            return_value = await self._get_return_power_value()
+            if return_value is None:
+                _LOGGER.debug("Could not read power sensor value - sensor may not be ready yet")
                 return
 
-            # Store the current power value
-            self._last_power_value = power_value
-            _LOGGER.debug("Current P1 power value: %.1f W", power_value)
+            # Store the current return value
+            self._last_power_value = return_value
+            _LOGGER.debug("Current grid return value: %.1f W", return_value)
 
-            # Available watts = solar surplus going to grid + what the boiler already draws.
-            # P1 negative → exporting to grid; adding boiler draw gives the true available budget.
+            # Available watts = energy currently exported to the grid + what the boiler already draws.
+            # Adding boiler draw gives the true available budget once the boiler is throttled.
             boiler_watts = self._extract_boiler_consumption()
-            available_watts = max(0, min(MAX_EXPORT_WATTS, int(-power_value + boiler_watts)))
+            available_watts = max(0, min(MAX_EXPORT_WATTS, int(return_value + boiler_watts)))
 
             _LOGGER.debug(
-                "Auto mode: P1=%.1fW, boiler=%.1fW, available=%dW",
-                power_value,
+                "Auto mode: return=%.1fW, boiler=%.1fW, available=%dW",
+                return_value,
                 boiler_watts,
                 available_watts,
             )
@@ -257,8 +274,8 @@ class BoilerController:
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.error("Error during controller update: %s", err)
 
-    async def _get_p1_power_value(self) -> float | None:
-        """Get current power value from power sensor entity."""
+    async def _get_return_power_value(self) -> float | None:
+        """Get the current grid-return value (Watts) derived from the power sensor."""
         try:
             state = self.hass.states.get(self.power_sensor_id)
             if not state:
@@ -290,7 +307,7 @@ class BoilerController:
             # Clear the missing sensor log timer since we got data
             if hasattr(self, "_last_missing_sensor_log"):
                 delattr(self, "_last_missing_sensor_log")
-            return power_value
+            return self._derive_return_value(power_value)
 
         except (ValueError, TypeError) as err:
             _LOGGER.warning(
@@ -299,6 +316,17 @@ class BoilerController:
                 err,
             )
             return None
+
+    def _derive_return_value(self, raw_value: float) -> float:
+        """Translate the raw power sensor value into a non-negative grid-return value.
+
+        - Return sensors are expected to be >= 0; values below zero are clamped to 0.
+        - Net power sensors use the convention negative = export, so the return
+          value is the magnitude of the negative reading (or 0 when importing).
+        """
+        if self.power_sensor_type == POWER_SENSOR_TYPE_NET:
+            return max(0.0, -raw_value)
+        return max(0.0, raw_value)
 
     async def _async_poll_device(self):
         """Poll the BC device status and system info at the configured interval."""
@@ -361,14 +389,12 @@ class BoilerController:
     @property
     def device_info(self):
         """Return device information."""
-        from .const import VERSION as DEFAULT_VERSION
-        version = self.integration_version if self.integration_version else DEFAULT_VERSION
         return {
             "identifiers": {(DOMAIN, self.config_entry.entry_id)},
             "name": self.config_entry.title,
             "manufacturer": "Powerbaas",
             "model": "Boiler Controller",
-            "sw_version": str(version),
+            "sw_version": str(self.integration_version),
         }
 
     def get_status(self):
@@ -377,6 +403,7 @@ class BoilerController:
             "last_control_update": self._last_control_update,
             "last_power_value": self._last_power_value,
             "power_sensor": self.power_sensor_id,
+            "power_sensor_type": self.power_sensor_type,
             "device_url": self.device_url,
             "device_status": self._device_status,
             "system_status": self._system_status,

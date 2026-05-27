@@ -10,7 +10,12 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     DOMAIN,
-    CONF_P1_TOTAL_ENTITY,
+    CONFIG_FLOW_VERSION,
+    CONF_POWER_SENSOR,
+    CONF_POWER_SENSOR_TYPE,
+    POWER_SENSOR_TYPE_RETURN,
+    POWER_SENSOR_TYPE_NET,
+    POWER_SENSOR_TYPES,
     CONF_DEVICE_URL,
     CONF_DEVICE_ID,
     BC_HOST_PREFIX,
@@ -73,8 +78,13 @@ class DeviceValidationMixin:
             return m.group(1).lower()
         return None
 
-    async def _get_power_sensors(self):
-        """Get list of suitable power sensors from HA."""
+    async def _get_return_sensors(self):
+        """Get list of candidate power-like sensors from HA.
+
+        Includes both dedicated grid-return sensors (always positive) and
+        net power sensors (negative when exporting); the user picks which
+        flavour they configured via the power sensor type field.
+        """
         sensors = {}
         for entity_id in self.hass.states.async_entity_ids("sensor"):
             state = self.hass.states.get(entity_id)
@@ -106,7 +116,7 @@ class DeviceValidationMixin:
 
 
 class BoilerControllerConfigFlow(DeviceValidationMixin, config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 4
+    VERSION = CONFIG_FLOW_VERSION
 
     def __init__(self):
         self.data = {}
@@ -161,22 +171,35 @@ class BoilerControllerConfigFlow(DeviceValidationMixin, config_entries.ConfigFlo
         errors = {}
 
         if user_input is not None:
-            # Store power sensor selection
-            self.data.update(user_input)
-            return await self.async_step_device_config()
+            # Validate the sensor type and store the selection.
+            sensor_type = user_input.get(CONF_POWER_SENSOR_TYPE)
+            if sensor_type not in POWER_SENSOR_TYPES:
+                errors[CONF_POWER_SENSOR_TYPE] = "invalid_sensor_type"
+            else:
+                self.data.update(user_input)
+                return await self.async_step_device_config()
 
-        # Get power sensors
-        power_sensors = await self._get_power_sensors()
+        # Get candidate sensors
+        sensors = await self._get_return_sensors()
 
-        if not power_sensors:
+        if not sensors:
             return self.async_abort(reason="no_power_sensors")
 
         schema = vol.Schema({
-            vol.Required(CONF_P1_TOTAL_ENTITY): selector.SelectSelector(
+            vol.Required(CONF_POWER_SENSOR_TYPE, default=POWER_SENSOR_TYPE_RETURN): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": POWER_SENSOR_TYPE_RETURN, "label": "Return sensor (always positive)"},
+                        {"value": POWER_SENSOR_TYPE_NET, "label": "Net power sensor (negative when exporting)"},
+                    ],
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+            vol.Required(CONF_POWER_SENSOR): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
                         {"value": key, "label": value}
-                        for key, value in power_sensors.items()
+                        for key, value in sensors.items()
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
@@ -264,31 +287,49 @@ class BoilerControllerOptionsFlow(DeviceValidationMixin, config_entries.OptionsF
 
     async def async_step_power_sensor(self, user_input=None):
         """Handle power sensor change."""
-        if user_input is not None:
-            self.data.update(user_input)
-            return await self.async_step_device_config()
+        errors = {}
 
-        # Get power sensors
-        power_sensors = await self._get_power_sensors()
-        if not power_sensors:
+        if user_input is not None:
+            sensor_type = user_input.get(CONF_POWER_SENSOR_TYPE)
+            if sensor_type not in POWER_SENSOR_TYPES:
+                errors[CONF_POWER_SENSOR_TYPE] = "invalid_sensor_type"
+            else:
+                self.data.update(user_input)
+                return await self.async_step_device_config()
+
+        # Get candidate sensors
+        sensors = await self._get_return_sensors()
+        if not sensors:
             return self.async_abort(reason="no_power_sensors")
 
         # Get current selection
-        current_power_sensor = self._config_entry.data.get(CONF_P1_TOTAL_ENTITY)
+        current_sensor = self._config_entry.data.get(CONF_POWER_SENSOR)
+        current_type = self._config_entry.data.get(
+            CONF_POWER_SENSOR_TYPE, POWER_SENSOR_TYPE_RETURN
+        )
 
         schema = vol.Schema({
-            vol.Required(CONF_P1_TOTAL_ENTITY, default=current_power_sensor): selector.SelectSelector(
+            vol.Required(CONF_POWER_SENSOR_TYPE, default=current_type): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": POWER_SENSOR_TYPE_RETURN, "label": "Return sensor (always positive)"},
+                        {"value": POWER_SENSOR_TYPE_NET, "label": "Net power sensor (negative when exporting)"},
+                    ],
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+            vol.Required(CONF_POWER_SENSOR, default=current_sensor): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
                         {"value": key, "label": value}
-                        for key, value in power_sensors.items()
+                        for key, value in sensors.items()
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
         })
 
-        return self.async_show_form(step_id="power_sensor", data_schema=schema)
+        return self.async_show_form(step_id="power_sensor", data_schema=schema, errors=errors)
 
     async def async_step_device_config(self, user_input=None):
         """Handle BC device URL updates."""

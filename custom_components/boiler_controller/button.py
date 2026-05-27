@@ -13,21 +13,18 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN,
-    VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def _device_info(config_entry: ConfigEntry, controller) -> Dict[str, Any]:
-    from .const import VERSION
-    version = controller.integration_version if controller.integration_version else VERSION
     return {
         "identifiers": {(DOMAIN, config_entry.entry_id)},
         "name": config_entry.title,
         "manufacturer": "Powerbaas",
         "model": "Boiler Controller",
-        "sw_version": str(version),
+        "sw_version": str(controller.integration_version),
     }
 
 

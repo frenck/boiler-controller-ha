@@ -10,9 +10,10 @@
       },
       "power_sensor": {
         "title": "Select Power Sensor",
-        "description": "Choose the sensor that provides current power consumption/production data (in Watts)",
+        "description": "Choose how energy returned to the grid is reported. You either have a dedicated return sensor that is always positive, or a single net power sensor that becomes negative when exporting.",
         "data": {
-          "p1_total_entity": "Power Sensor"
+          "power_sensor_type": "Power sensor type",
+          "power_sensor": "Power sensor entity"
         }
       },
       "device_config": {
@@ -27,6 +28,7 @@
       "no_power_sensors": "No power sensors found in Home Assistant",
       "entity_not_found": "The selected entity was not found",
       "invalid_url": "Provide a valid http(s) URL",
+      "invalid_sensor_type": "Pick either a return sensor or a net power sensor",
       "cannot_connect": "Unable to reach the BC module",
       "cannot_identify": "Unable to determine the module identity",
       "device_in_use": "This module is already configured"
@@ -47,9 +49,10 @@
       },
       "power_sensor": {
         "title": "Select New Power Sensor",
-        "description": "Choose a new sensor that provides current power consumption/production data (in Watts)",
+        "description": "Choose how energy returned to the grid is reported. You either have a dedicated return sensor that is always positive, or a single net power sensor that becomes negative when exporting.",
         "data": {
-          "p1_total_entity": "Power Sensor"
+          "power_sensor_type": "Power sensor type",
+          "power_sensor": "Power sensor entity"
         }
       },
       "device_config": {

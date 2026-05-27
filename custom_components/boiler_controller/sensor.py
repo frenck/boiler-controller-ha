@@ -38,8 +38,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _integration_version(controller, config_entry: ConfigEntry) -> str:
-    from .const import VERSION as DEFAULT_VERSION
-    return str(controller.integration_version or DEFAULT_VERSION)
+    return str(controller.integration_version)
 
 
 def _device_info(config_entry: ConfigEntry, controller) -> Dict[str, Any]:
@@ -156,6 +155,7 @@ class BoilerControllerStatusSensor(SensorEntity):
     def extra_state_attributes(self) -> Dict[str, Any]:
         attrs: Dict[str, Any] = {
             "power_sensor": self.controller.power_sensor_id,
+            "power_sensor_type": self.controller.power_sensor_type,
             "device_url": self.controller.device_url,
             "poll_interval": f"{self.controller.poll_interval}s",
             "integration_version": _integration_version(self.controller, self.config_entry),
@@ -183,6 +183,7 @@ class BoilerControllerStatusSensor(SensorEntity):
                     "power_sensor_status": "available",
                     "power_sensor_value": power_state.state,
                     "power_sensor_unit": power_state.attributes.get("unit_of_measurement", "W"),
+                    "power_sensor_type": self.controller.power_sensor_type,
                 }
             )
         else:
@@ -201,7 +202,7 @@ class BoilerControllerStatusSensor(SensorEntity):
 
 
 class PowerSensorStatusSensor(SensorEntity):
-    """Expose the configured power sensor state for debugging."""
+    """Expose the configured source sensor's raw value for debugging."""
 
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.POWER
@@ -213,6 +214,7 @@ class PowerSensorStatusSensor(SensorEntity):
         self.config_entry = config_entry
         self.controller = controller
         self._attr_name = f"{config_entry.title} Power Sensor"
+        # Keep the historical unique_id suffix so existing entities are preserved.
         self._attr_unique_id = f"{config_entry.entry_id}_power_sensor"
         self._remove_callbacks: List[Callable] = []
 

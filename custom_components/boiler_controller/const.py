@@ -1,5 +1,7 @@
 DOMAIN = "boiler_controller"
-VERSION = "1.0.0"
+
+# Config entry schema version (bump when changing stored data shape)
+CONFIG_FLOW_VERSION = 5
 
 PLATFORMS = ["sensor", "select", "number", "button"]
 
@@ -8,10 +10,20 @@ STEP_POWER_SENSOR = "power_sensor"
 STEP_DEVICE_CONFIG = "device_config"
 
 # Configuration keys
-CONF_P1_TOTAL_ENTITY = "power_sensor"
+# Entity ID of the power sensor used to derive the grid-return value.
+CONF_POWER_SENSOR = "power_sensor"
+# Power sensor semantics:
+#   "return" = always positive (Watts exported to the grid only)
+#   "net"    = signed net power (negative when exporting, positive when importing)
+CONF_POWER_SENSOR_TYPE = "power_sensor_type"
 CONF_DEVICE_URL = "device_url"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_DEVICE_ID = "device_id"
+
+# Power sensor type values
+POWER_SENSOR_TYPE_RETURN = "return"
+POWER_SENSOR_TYPE_NET = "net"
+POWER_SENSOR_TYPES = [POWER_SENSOR_TYPE_RETURN, POWER_SENSOR_TYPE_NET]
 
 # Boiler Controller mDNS hostname prefix (pb-bc-*)
 BC_HOST_PREFIX = ("pb-bc-",)
