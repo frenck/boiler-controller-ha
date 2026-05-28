@@ -53,6 +53,12 @@ Run the calibration sweep once so the BC device knows how many watts correspond 
 
 To abort a running calibration press **Calibrate Stop**.
 
+> **Before you start a manual calibration:**
+> - The boiler must be **cooled down**. If it is already at temperature the heating element cannot reach the higher setpoints and the curve will be incomplete.
+> - The sweep takes **at least 6 minutes** while it measures every percentage point against the actual wattage.
+> - Running it manually is **optional** — the controller will calibrate itself automatically over time. Use the button only when you want an immediate, complete curve.
+
+
 ## Entities
 
 ### Controls

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict
 
+from homeassistant.components import persistent_notification
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -77,17 +79,21 @@ class _BaseCalibrationButton(ButtonEntity):
     def device_info(self) -> Dict[str, Any]:
         return _device_info(self.config_entry, self.controller)
 
-    async def _async_notify(self, message: str) -> None:
-        notification_id = f"boiler_controller_calibration_{self.config_entry.entry_id}"
-        await self.hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {
-                "title": "Boiler Controller",
-                "message": message,
-                "notification_id": notification_id,
-            },
-            blocking=False,
+    async def _async_notify(self, message: str, *, unique: bool = False) -> None:
+        suffix = f"_{int(time.time())}" if unique else ""
+        notification_id = (
+            f"boiler_controller_calibration_{self.config_entry.entry_id}{suffix}"
+        )
+        _LOGGER.info(
+            "Posting persistent notification %s for %s",
+            notification_id,
+            self.config_entry.title,
+        )
+        persistent_notification.async_create(
+            self.hass,
+            message,
+            title="Boiler Controller",
+            notification_id=notification_id,
         )
 
 
@@ -107,6 +113,20 @@ class BoilerCalibrationButton(_BaseCalibrationButton):
             raise HomeAssistantError(message)
 
         _LOGGER.info("Calibration button pressed for %s", self.config_entry.title)
+
+        await self._async_notify(
+            "Calibration started.\n\n"
+            "- Make sure the boiler is **cooled down** - if it is already at "
+            "temperature the heating element cannot reach the higher setpoints "
+            "and the curve will be incomplete.\n"
+            "- The sweep takes **at least 6 minutes** while it measures every "
+            "percentage point against the actual wattage.\n"
+            "- Running this manually is **optional** - the controller will "
+            "calibrate itself automatically over time. Use this button only when "
+            "you want an immediate, complete curve.\n\n"
+            "Press *Calibrate Stop* to abort.",
+            unique=True,
+        )
 
         async def _run_calibration() -> None:
             try:
