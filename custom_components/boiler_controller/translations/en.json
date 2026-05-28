@@ -9,11 +9,25 @@
         }
       },
       "power_sensor": {
-        "title": "Select Power Sensor",
-        "description": "Choose how energy returned to the grid is reported. You either have a dedicated return sensor that is always positive, or a single net power sensor that becomes negative when exporting.",
+        "title": "Choose Power Sensor Type",
+        "description": "Pick how grid power is reported in Home Assistant. A net (signed) sensor is one entity that goes negative when exporting. A split setup uses two separate sensors for return (export) and usage (import).",
         "data": {
-          "power_sensor_type": "Power sensor type",
-          "power_sensor": "Power sensor entity"
+          "power_sensor_type": "Power sensor type"
+        }
+      },
+      "power_sensor_net": {
+        "title": "Select Net Power Sensor",
+        "description": "Choose a single sensor that reports net grid power (negative when exporting to the grid).",
+        "data": {
+          "power_sensor": "Net power sensor"
+        }
+      },
+      "power_sensor_split": {
+        "title": "Select Return and Usage Sensors",
+        "description": "Choose two separate sensors: one for power returned to the grid and one for power drawn from the grid. Both should always be 0 or positive.",
+        "data": {
+          "return_sensor": "Return sensor (export)",
+          "usage_sensor": "Usage sensor (import)"
         }
       },
       "device_config": {
@@ -28,7 +42,8 @@
       "no_power_sensors": "No power sensors found in Home Assistant",
       "entity_not_found": "The selected entity was not found",
       "invalid_url": "Provide a valid http(s) URL",
-      "invalid_sensor_type": "Pick either a return sensor or a net power sensor",
+      "invalid_sensor_type": "Pick either net or split mode",
+      "sensors_must_differ": "Return and usage sensors must be different entities",
       "cannot_connect": "Unable to reach the BC module",
       "cannot_identify": "Unable to determine the module identity",
       "device_in_use": "This module is already configured"
@@ -48,11 +63,25 @@
         }
       },
       "power_sensor": {
-        "title": "Select New Power Sensor",
-        "description": "Choose how energy returned to the grid is reported. You either have a dedicated return sensor that is always positive, or a single net power sensor that becomes negative when exporting.",
+        "title": "Change Power Sensor Type",
+        "description": "Pick how grid power is reported. Choose net for a single signed sensor or split for two separate return/usage sensors.",
         "data": {
-          "power_sensor_type": "Power sensor type",
-          "power_sensor": "Power sensor entity"
+          "power_sensor_type": "Power sensor type"
+        }
+      },
+      "power_sensor_net": {
+        "title": "Select New Net Power Sensor",
+        "description": "Choose a single sensor that reports net grid power (negative when exporting).",
+        "data": {
+          "power_sensor": "Net power sensor"
+        }
+      },
+      "power_sensor_split": {
+        "title": "Select New Return and Usage Sensors",
+        "description": "Choose two separate sensors: one for power returned to the grid and one for power drawn from the grid.",
+        "data": {
+          "return_sensor": "Return sensor (export)",
+          "usage_sensor": "Usage sensor (import)"
         }
       },
       "device_config": {

@@ -10,8 +10,10 @@ from .const import (
     DOMAIN,
     CONF_POWER_SENSOR,
     CONF_POWER_SENSOR_TYPE,
-    POWER_SENSOR_TYPE_RETURN,
+    CONF_RETURN_SENSOR,
+    CONF_USAGE_SENSOR,
     POWER_SENSOR_TYPE_NET,
+    POWER_SENSOR_TYPE_SPLIT,
     POWER_SENSOR_TYPES,
     CONF_DEVICE_URL,
     CONF_POLL_INTERVAL,
@@ -53,14 +55,26 @@ class BoilerController:
 
         # Configuration
         self.device_url = config_entry.data[CONF_DEVICE_URL]
-        # Source sensor for the grid-return calculation. Two flavours are supported:
-        #   - POWER_SENSOR_TYPE_RETURN: sensor value is always >= 0 (Watts exported).
-        #   - POWER_SENSOR_TYPE_NET:    signed sensor where negative values indicate export.
-        self.power_sensor_id = config_entry.data[CONF_POWER_SENSOR]
-        sensor_type = config_entry.data.get(CONF_POWER_SENSOR_TYPE, POWER_SENSOR_TYPE_RETURN)
+
+        # Power-sensor configuration. Two flavours are supported:
+        #   - POWER_SENSOR_TYPE_NET:   single signed sensor (negative = export).
+        #   - POWER_SENSOR_TYPE_SPLIT: two sensors, one for grid return (export)
+        #     and one for grid usage (import); both always >= 0.
+        sensor_type = config_entry.data.get(CONF_POWER_SENSOR_TYPE, POWER_SENSOR_TYPE_NET)
         self.power_sensor_type = (
-            sensor_type if sensor_type in POWER_SENSOR_TYPES else POWER_SENSOR_TYPE_RETURN
+            sensor_type if sensor_type in POWER_SENSOR_TYPES else POWER_SENSOR_TYPE_NET
         )
+        if self.power_sensor_type == POWER_SENSOR_TYPE_SPLIT:
+            self.power_sensor_id = None
+            self.return_sensor_id = config_entry.data[CONF_RETURN_SENSOR]
+            self.usage_sensor_id = config_entry.data[CONF_USAGE_SENSOR]
+            self._tracked_entities = [self.return_sensor_id, self.usage_sensor_id]
+        else:
+            self.power_sensor_id = config_entry.data[CONF_POWER_SENSOR]
+            self.return_sensor_id = None
+            self.usage_sensor_id = None
+            self._tracked_entities = [self.power_sensor_id]
+
         self.device_client = BCClient(hass, self.device_url)
 
         stored_mode = config_entry.options.get("control_mode", BOILER_MODE_OFF)
@@ -79,9 +93,9 @@ class BoilerController:
         )
 
         _LOGGER.debug(
-            "Initialized BoilerController: Power Sensor=%s (type=%s), Device URL=%s, poll_interval=%ds",
-            self.power_sensor_id,
+            "Initialized BoilerController: type=%s, tracked=%s, Device URL=%s, poll_interval=%ds",
             self.power_sensor_type,
+            self._tracked_entities,
             self.device_url,
             self.poll_interval,
         )
@@ -104,13 +118,13 @@ class BoilerController:
         # Start listening to power sensor state changes
         self._cancel_listener = async_track_state_change_event(
             self.hass,
-            [self.power_sensor_id],
+            self._tracked_entities,
             self._async_power_sensor_changed,
         )
         _LOGGER.info(
-            "Started listening to power sensor state changes for: %s (type=%s)",
-            self.power_sensor_id,
+            "Started listening to power sensor state changes (type=%s) for: %s",
             self.power_sensor_type,
+            self._tracked_entities,
         )
 
         # Start BC device polling task
@@ -152,32 +166,25 @@ class BoilerController:
             _LOGGER.debug("Skipping update - state unchanged or unavailable")
             return
 
-        # Parse and validate the new power value
-        try:
-            raw_power_value = float(new_state.state)
-        except (ValueError, TypeError):
-            _LOGGER.warning("Invalid power sensor value: %s", new_state.state)
+        # Compute the latest signed surplus and only update when it moved enough.
+        new_surplus = self._compute_surplus()
+        if new_surplus is None:
             return
 
-        unit = self._get_state_unit(new_state)
-        raw_power_value = self._normalize_power_unit(raw_power_value, unit)
-        new_power_value = self._derive_return_value(raw_power_value)
-
-        # Only update if power value actually changed significantly (>1 W)
-        if self._last_power_value is not None and abs(new_power_value - self._last_power_value) < 1:
+        if self._last_power_value is not None and abs(new_surplus - self._last_power_value) < 1:
             _LOGGER.debug(
-                "Skipping update - power change too small: %.1fW",
-                abs(new_power_value - self._last_power_value),
+                "Skipping update - surplus change too small: %.1fW",
+                abs(new_surplus - self._last_power_value),
             )
             return
 
-        self._last_power_value = new_power_value
+        self._last_power_value = new_surplus
         _LOGGER.debug(
-            "Power sensor changed from %s %s to raw %.3f W -> return %.3f W (processing update)",
+            "Power sensor %s changed (state %s -> %s); surplus now %.1f W",
+            event.data.get("entity_id"),
             old_state.state if old_state else "unknown",
-            unit or "W",
-            raw_power_value,
-            new_power_value,
+            new_state.state,
+            new_surplus,
         )
 
         await self._async_update()
@@ -199,25 +206,24 @@ class BoilerController:
     async def _validate_configuration(self) -> bool:
         """Validate that all configured entities exist."""
 
-        # Check power sensor exists (informational only, don't block startup)
-        sensor_state = self.hass.states.get(self.power_sensor_id)
-        if not sensor_state:
-            _LOGGER.info(
-                "Power sensor %s not found yet - controller will start and wait for entity",
-                self.power_sensor_id,
-            )
-        else:
-            _LOGGER.info(
-                "Found power sensor: %s (type=%s, current value: %s)",
-                self.power_sensor_id,
-                self.power_sensor_type,
-                sensor_state.state,
-            )
+        for entity_id in self._tracked_entities:
+            sensor_state = self.hass.states.get(entity_id)
+            if not sensor_state:
+                _LOGGER.info(
+                    "Power sensor %s not found yet - controller will start and wait for entity",
+                    entity_id,
+                )
+            else:
+                _LOGGER.info(
+                    "Found power sensor: %s (current value: %s)",
+                    entity_id,
+                    sensor_state.state,
+                )
 
         _LOGGER.info(
-            "Controller configured with power sensor: %s (type=%s), Device URL: %s",
-            self.power_sensor_id,
+            "Controller configured (type=%s, sensors=%s, Device URL=%s)",
             self.power_sensor_type,
+            self._tracked_entities,
             self.device_url,
         )
         return True
@@ -242,24 +248,26 @@ class BoilerController:
                 await self._apply_manual_watts()
                 return
 
-            # Auto mode: compute surplus watts from grid return + current boiler draw
-            return_value = await self._get_return_power_value()
-            if return_value is None:
+            # Auto mode: compute signed surplus (positive=export, negative=import)
+            # and combine it with the boiler's current draw.
+            surplus = self._compute_surplus()
+            if surplus is None:
                 _LOGGER.debug("Could not read power sensor value - sensor may not be ready yet")
                 return
 
-            # Store the current return value
-            self._last_power_value = return_value
-            _LOGGER.debug("Current grid return value: %.1f W", return_value)
+            # Store the current surplus value
+            self._last_power_value = surplus
+            _LOGGER.debug("Current grid surplus: %.1f W", surplus)
 
-            # Available watts = energy currently exported to the grid + what the boiler already draws.
-            # Adding boiler draw gives the true available budget once the boiler is throttled.
+            # Available watts for the boiler is the current boiler draw plus the
+            # signed surplus. When importing, surplus is negative and the boiler
+            # is throttled down; when exporting it is allowed to ramp up.
             boiler_watts = self._extract_boiler_consumption()
-            available_watts = max(0, min(MAX_EXPORT_WATTS, int(return_value + boiler_watts)))
+            available_watts = max(0, min(MAX_EXPORT_WATTS, int(boiler_watts + surplus)))
 
             _LOGGER.debug(
-                "Auto mode: return=%.1fW, boiler=%.1fW, available=%dW",
-                return_value,
+                "Auto mode: surplus=%.1fW, boiler=%.1fW, available=%dW",
+                surplus,
                 boiler_watts,
                 available_watts,
             )
@@ -274,59 +282,74 @@ class BoilerController:
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.error("Error during controller update: %s", err)
 
-    async def _get_return_power_value(self) -> float | None:
-        """Get the current grid-return value (Watts) derived from the power sensor."""
-        try:
-            state = self.hass.states.get(self.power_sensor_id)
-            if not state:
-                # Only show this error occasionally, not every time
-                now = dt_util.utcnow()
-                if not hasattr(self, "_last_missing_sensor_log") or (
-                    now - self._last_missing_sensor_log
-                ).total_seconds() > 60:
-                    _LOGGER.warning(
-                        "Power sensor %s not found - check if entity exists",
-                        self.power_sensor_id,
-                    )
-                    self._last_missing_sensor_log = now
-                return None
+    def _read_sensor_watts(self, entity_id: str) -> float | None:
+        """Read a single sensor and return its value normalised to Watts.
 
-            if state.state in ("unknown", "unavailable", "none"):
-                _LOGGER.debug(
-                    "Power sensor %s is unavailable (state: %s)",
-                    self.power_sensor_id,
-                    state.state,
+        Returns ``None`` when the entity is missing, unavailable or the state
+        cannot be parsed as a number.
+        """
+        state = self.hass.states.get(entity_id)
+        if not state:
+            now = dt_util.utcnow()
+            cache = getattr(self, "_missing_sensor_log", {})
+            last = cache.get(entity_id)
+            if last is None or (now - last).total_seconds() > 60:
+                _LOGGER.warning(
+                    "Power sensor %s not found - check if entity exists",
+                    entity_id,
                 )
-                return None
+                cache[entity_id] = now
+                self._missing_sensor_log = cache
+            return None
 
-            # Convert state to float and normalize units
-            power_value = float(state.state)
-            unit = self._get_state_unit(state)
-            power_value = self._normalize_power_unit(power_value, unit)
+        if state.state in ("unknown", "unavailable", "none"):
+            _LOGGER.debug(
+                "Power sensor %s is unavailable (state: %s)", entity_id, state.state
+            )
+            return None
 
-            # Clear the missing sensor log timer since we got data
-            if hasattr(self, "_last_missing_sensor_log"):
-                delattr(self, "_last_missing_sensor_log")
-            return self._derive_return_value(power_value)
-
+        try:
+            value = float(state.state)
         except (ValueError, TypeError) as err:
             _LOGGER.warning(
-                "Error parsing power sensor value '%s': %s",
-                state.state if state else "None",
+                "Error parsing power sensor value '%s' for %s: %s",
+                state.state,
+                entity_id,
                 err,
             )
             return None
 
-    def _derive_return_value(self, raw_value: float) -> float:
-        """Translate the raw power sensor value into a non-negative grid-return value.
+        unit = self._get_state_unit(state)
+        value = self._normalize_power_unit(value, unit)
 
-        - Return sensors are expected to be >= 0; values below zero are clamped to 0.
-        - Net power sensors use the convention negative = export, so the return
-          value is the magnitude of the negative reading (or 0 when importing).
+        # Clear stale missing-sensor log entry once data flows again
+        cache = getattr(self, "_missing_sensor_log", None)
+        if cache and entity_id in cache:
+            cache.pop(entity_id, None)
+
+        return value
+
+    def _compute_surplus(self) -> float | None:
+        """Return the signed grid surplus in Watts.
+
+        Positive values mean we are exporting to the grid, negative values
+        mean we are importing. ``None`` is returned when the required
+        sensor(s) cannot be read.
         """
-        if self.power_sensor_type == POWER_SENSOR_TYPE_NET:
-            return max(0.0, -raw_value)
-        return max(0.0, raw_value)
+        if self.power_sensor_type == POWER_SENSOR_TYPE_SPLIT:
+            return_watts = self._read_sensor_watts(self.return_sensor_id)
+            usage_watts = self._read_sensor_watts(self.usage_sensor_id)
+            if return_watts is None or usage_watts is None:
+                return None
+            # Both sensors are always >= 0; the difference gives the signed
+            # surplus (export minus import).
+            return float(return_watts) - float(usage_watts)
+
+        # Net mode: single signed sensor, negative when exporting.
+        net_watts = self._read_sensor_watts(self.power_sensor_id)
+        if net_watts is None:
+            return None
+        return -float(net_watts)
 
     async def _async_poll_device(self):
         """Poll the BC device status and system info at the configured interval."""
@@ -404,6 +427,8 @@ class BoilerController:
             "last_power_value": self._last_power_value,
             "power_sensor": self.power_sensor_id,
             "power_sensor_type": self.power_sensor_type,
+            "return_sensor": self.return_sensor_id,
+            "usage_sensor": self.usage_sensor_id,
             "device_url": self.device_url,
             "device_status": self._device_status,
             "system_status": self._system_status,

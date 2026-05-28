@@ -60,7 +60,7 @@ async def async_setup_entry(
 
     sensors: List[SensorEntity] = [
         BoilerControllerStatusSensor(hass, config_entry, controller),
-        PowerSensorStatusSensor(hass, config_entry, controller),
+        *_build_power_source_sensors(hass, config_entry, controller),
         LastDimmerUpdateSensor(hass, config_entry, controller),
         # Device sensors from /api/status
         DevicePowerSensor(hass, config_entry, controller),
@@ -102,7 +102,7 @@ class BoilerControllerStatusSensor(SensorEntity):
         self._remove_callbacks.append(
             async_track_state_change_event(
                 self.hass,
-                [self.controller.power_sensor_id],
+                list(self.controller._tracked_entities),
                 self._handle_update,
             )
         )
@@ -154,8 +154,10 @@ class BoilerControllerStatusSensor(SensorEntity):
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         attrs: Dict[str, Any] = {
-            "power_sensor": self.controller.power_sensor_id,
             "power_sensor_type": self.controller.power_sensor_type,
+            "power_sensor": self.controller.power_sensor_id,
+            "return_sensor": self.controller.return_sensor_id,
+            "usage_sensor": self.controller.usage_sensor_id,
             "device_url": self.controller.device_url,
             "poll_interval": f"{self.controller.poll_interval}s",
             "integration_version": _integration_version(self.controller, self.config_entry),
@@ -176,18 +178,26 @@ class BoilerControllerStatusSensor(SensorEntity):
             }
         )
 
-        power_state = self.hass.states.get(self.controller.power_sensor_id)
-        if power_state:
-            attrs.update(
-                {
-                    "power_sensor_status": "available",
-                    "power_sensor_value": power_state.state,
-                    "power_sensor_unit": power_state.attributes.get("unit_of_measurement", "W"),
-                    "power_sensor_type": self.controller.power_sensor_type,
-                }
-            )
-        else:
-            attrs["power_sensor_status"] = "missing"
+        # Per-sensor status (handles both net and split configurations)
+        missing_any = False
+        for label, entity_id in (
+            ("power_sensor", self.controller.power_sensor_id),
+            ("return_sensor", self.controller.return_sensor_id),
+            ("usage_sensor", self.controller.usage_sensor_id),
+        ):
+            if not entity_id:
+                continue
+            state = self.hass.states.get(entity_id)
+            if state:
+                attrs[f"{label}_status"] = "available"
+                attrs[f"{label}_value"] = state.state
+                attrs[f"{label}_unit"] = state.attributes.get(
+                    "unit_of_measurement", "W"
+                )
+            else:
+                attrs[f"{label}_status"] = "missing"
+                missing_any = True
+        attrs["sensors_status"] = "missing" if missing_any else "available"
 
         if self.controller._last_control_update:
             attrs["last_control_update"] = self.controller._last_control_update.isoformat()
@@ -201,28 +211,40 @@ class BoilerControllerStatusSensor(SensorEntity):
         return _device_info(self.config_entry, self.controller)
 
 
-class PowerSensorStatusSensor(SensorEntity):
-    """Expose the configured source sensor's raw value for debugging."""
+class PowerSourceMirrorSensor(SensorEntity):
+    """Mirror a single configured power source entity as a diagnostic sensor.
+
+    One instance is registered per configured source: a single sensor in
+    net mode, or two sensors (return + usage) in split mode.
+    """
 
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = "W"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, hass, config_entry, controller) -> None:
+    def __init__(
+        self,
+        hass,
+        config_entry,
+        controller,
+        source_entity_id: str,
+        name_suffix: str,
+        unique_id_suffix: str,
+    ) -> None:
         self.hass = hass
         self.config_entry = config_entry
         self.controller = controller
-        self._attr_name = f"{config_entry.title} Power Sensor"
-        # Keep the historical unique_id suffix so existing entities are preserved.
-        self._attr_unique_id = f"{config_entry.entry_id}_power_sensor"
+        self._source_entity_id = source_entity_id
+        self._attr_name = f"{config_entry.title} {name_suffix}"
+        self._attr_unique_id = f"{config_entry.entry_id}_{unique_id_suffix}"
         self._remove_callbacks: List[Callable] = []
 
     async def async_added_to_hass(self) -> None:
         self._remove_callbacks.append(
             async_track_state_change_event(
                 self.hass,
-                [self.controller.power_sensor_id],
+                [self._source_entity_id],
                 self._handle_update,
             )
         )
@@ -239,22 +261,22 @@ class PowerSensorStatusSensor(SensorEntity):
 
     @property
     def native_value(self) -> Optional[float]:
-        power_state = self.hass.states.get(self.controller.power_sensor_id)
-        if power_state:
-            try:
-                value = float(power_state.state)
-                unit = self._extract_unit(power_state)
-                return self._normalize_power_unit(value, unit)
-            except (ValueError, TypeError):
-                return None
-        return None
+        state = self.hass.states.get(self._source_entity_id)
+        if not state:
+            return None
+        try:
+            value = float(state.state)
+        except (ValueError, TypeError):
+            return None
+        return self._normalize_power_unit(value, self._extract_unit(state))
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        state = self.hass.states.get(self.controller.power_sensor_id)
+        state = self.hass.states.get(self._source_entity_id)
         if not state:
-            return {"status": "missing"}
+            return {"source_entity": self._source_entity_id, "status": "missing"}
         return {
+            "source_entity": self._source_entity_id,
             "status": "available",
             "last_changed": state.last_changed.isoformat(),
             "last_updated": state.last_updated.isoformat(),
@@ -282,6 +304,44 @@ class PowerSensorStatusSensor(SensorEntity):
         return _device_info(self.config_entry, self.controller)
 
 
+def _build_power_source_sensors(
+    hass, config_entry, controller
+) -> List["PowerSourceMirrorSensor"]:
+    """Return one or two mirror sensors depending on the configured mode."""
+    from .const import POWER_SENSOR_TYPE_SPLIT
+
+    if controller.power_sensor_type == POWER_SENSOR_TYPE_SPLIT:
+        return [
+            PowerSourceMirrorSensor(
+                hass,
+                config_entry,
+                controller,
+                controller.return_sensor_id,
+                name_suffix="Grid Return",
+                unique_id_suffix="return_sensor",
+            ),
+            PowerSourceMirrorSensor(
+                hass,
+                config_entry,
+                controller,
+                controller.usage_sensor_id,
+                name_suffix="Grid Usage",
+                unique_id_suffix="usage_sensor",
+            ),
+        ]
+
+    return [
+        PowerSourceMirrorSensor(
+            hass,
+            config_entry,
+            controller,
+            controller.power_sensor_id,
+            name_suffix="Net Power",
+            unique_id_suffix="power_sensor",
+        )
+    ]
+
+
 class LastDimmerUpdateSensor(SensorEntity):
     """Sensor showing when the controller last adjusted the heating percentage."""
 
@@ -302,7 +362,7 @@ class LastDimmerUpdateSensor(SensorEntity):
         self._remove_callbacks.append(
             async_track_state_change_event(
                 self.hass,
-                [self.controller.power_sensor_id],
+                list(self.controller._tracked_entities),
                 self._handle_update,
             )
         )

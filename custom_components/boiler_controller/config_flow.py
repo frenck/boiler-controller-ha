@@ -13,8 +13,10 @@ from .const import (
     CONFIG_FLOW_VERSION,
     CONF_POWER_SENSOR,
     CONF_POWER_SENSOR_TYPE,
-    POWER_SENSOR_TYPE_RETURN,
+    CONF_RETURN_SENSOR,
+    CONF_USAGE_SENSOR,
     POWER_SENSOR_TYPE_NET,
+    POWER_SENSOR_TYPE_SPLIT,
     POWER_SENSOR_TYPES,
     CONF_DEVICE_URL,
     CONF_DEVICE_ID,
@@ -81,7 +83,7 @@ class DeviceValidationMixin:
     async def _get_return_sensors(self):
         """Get list of candidate power-like sensors from HA.
 
-        Includes both dedicated grid-return sensors (always positive) and
+        Includes both dedicated return/usage sensors (always positive) and
         net power sensors (negative when exporting); the user picks which
         flavour they configured via the power sensor type field.
         """
@@ -113,6 +115,32 @@ class DeviceValidationMixin:
                 except (ValueError, TypeError):
                     continue
         return sensors
+
+    def _sensor_type_schema(self, default: str) -> vol.Schema:
+        """Schema for picking the power-sensor flavour (net vs split)."""
+        return vol.Schema({
+            vol.Required(CONF_POWER_SENSOR_TYPE, default=default): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        {"value": POWER_SENSOR_TYPE_NET, "label": "Net power sensor (single signed sensor)"},
+                        {"value": POWER_SENSOR_TYPE_SPLIT, "label": "Separate return and usage sensors"},
+                    ],
+                    mode=selector.SelectSelectorMode.LIST,
+                )
+            ),
+        })
+
+    def _sensor_dropdown(self, sensors: dict, default=None):
+        """Build a dropdown selector from the candidate sensors mapping."""
+        return selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    {"value": key, "label": value}
+                    for key, value in sensors.items()
+                ],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
 
 
 class BoilerControllerConfigFlow(DeviceValidationMixin, config_entries.ConfigFlow, domain=DOMAIN):
@@ -167,47 +195,65 @@ class BoilerControllerConfigFlow(DeviceValidationMixin, config_entries.ConfigFlo
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
     async def async_step_power_sensor(self, user_input=None):
-        """Handle power sensor selection."""
+        """Pick the power-sensor flavour (net or split)."""
         errors = {}
 
         if user_input is not None:
-            # Validate the sensor type and store the selection.
             sensor_type = user_input.get(CONF_POWER_SENSOR_TYPE)
             if sensor_type not in POWER_SENSOR_TYPES:
                 errors[CONF_POWER_SENSOR_TYPE] = "invalid_sensor_type"
             else:
-                self.data.update(user_input)
-                return await self.async_step_device_config()
+                self.data[CONF_POWER_SENSOR_TYPE] = sensor_type
+                if sensor_type == POWER_SENSOR_TYPE_SPLIT:
+                    return await self.async_step_power_sensor_split()
+                return await self.async_step_power_sensor_net()
 
-        # Get candidate sensors
+        return self.async_show_form(
+            step_id="power_sensor",
+            data_schema=self._sensor_type_schema(POWER_SENSOR_TYPE_NET),
+            errors=errors,
+        )
+
+    async def async_step_power_sensor_net(self, user_input=None):
+        """Pick a single net (signed) power sensor."""
         sensors = await self._get_return_sensors()
-
         if not sensors:
             return self.async_abort(reason="no_power_sensors")
 
-        schema = vol.Schema({
-            vol.Required(CONF_POWER_SENSOR_TYPE, default=POWER_SENSOR_TYPE_RETURN): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": POWER_SENSOR_TYPE_RETURN, "label": "Return sensor (always positive)"},
-                        {"value": POWER_SENSOR_TYPE_NET, "label": "Net power sensor (negative when exporting)"},
-                    ],
-                    mode=selector.SelectSelectorMode.LIST,
-                )
-            ),
-            vol.Required(CONF_POWER_SENSOR): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": key, "label": value}
-                        for key, value in sensors.items()
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-        })
+        if user_input is not None:
+            self.data[CONF_POWER_SENSOR] = user_input[CONF_POWER_SENSOR]
+            # Clear any leftover split-mode keys
+            self.data.pop(CONF_RETURN_SENSOR, None)
+            self.data.pop(CONF_USAGE_SENSOR, None)
+            return await self.async_step_device_config()
 
+        schema = vol.Schema({
+            vol.Required(CONF_POWER_SENSOR): self._sensor_dropdown(sensors),
+        })
+        return self.async_show_form(step_id="power_sensor_net", data_schema=schema)
+
+    async def async_step_power_sensor_split(self, user_input=None):
+        """Pick separate return (export) and usage (import) sensors."""
+        errors = {}
+        sensors = await self._get_return_sensors()
+        if not sensors:
+            return self.async_abort(reason="no_power_sensors")
+
+        if user_input is not None:
+            if user_input[CONF_RETURN_SENSOR] == user_input[CONF_USAGE_SENSOR]:
+                errors[CONF_USAGE_SENSOR] = "sensors_must_differ"
+            else:
+                self.data[CONF_RETURN_SENSOR] = user_input[CONF_RETURN_SENSOR]
+                self.data[CONF_USAGE_SENSOR] = user_input[CONF_USAGE_SENSOR]
+                self.data.pop(CONF_POWER_SENSOR, None)
+                return await self.async_step_device_config()
+
+        schema = vol.Schema({
+            vol.Required(CONF_RETURN_SENSOR): self._sensor_dropdown(sensors),
+            vol.Required(CONF_USAGE_SENSOR): self._sensor_dropdown(sensors),
+        })
         return self.async_show_form(
-            step_id="power_sensor", data_schema=schema, errors=errors
+            step_id="power_sensor_split", data_schema=schema, errors=errors
         )
 
     async def async_step_device_config(self, user_input=None):
@@ -286,50 +332,79 @@ class BoilerControllerOptionsFlow(DeviceValidationMixin, config_entries.OptionsF
         )
 
     async def async_step_power_sensor(self, user_input=None):
-        """Handle power sensor change."""
+        """Pick the power-sensor flavour (net or split) when changing the sensor."""
         errors = {}
+        current_type = self._config_entry.data.get(
+            CONF_POWER_SENSOR_TYPE, POWER_SENSOR_TYPE_NET
+        )
 
         if user_input is not None:
             sensor_type = user_input.get(CONF_POWER_SENSOR_TYPE)
             if sensor_type not in POWER_SENSOR_TYPES:
                 errors[CONF_POWER_SENSOR_TYPE] = "invalid_sensor_type"
             else:
-                self.data.update(user_input)
-                return await self.async_step_device_config()
+                self.data[CONF_POWER_SENSOR_TYPE] = sensor_type
+                if sensor_type == POWER_SENSOR_TYPE_SPLIT:
+                    return await self.async_step_power_sensor_split()
+                return await self.async_step_power_sensor_net()
 
-        # Get candidate sensors
+        return self.async_show_form(
+            step_id="power_sensor",
+            data_schema=self._sensor_type_schema(current_type),
+            errors=errors,
+        )
+
+    async def async_step_power_sensor_net(self, user_input=None):
+        """Pick the single net sensor when changing the sensor."""
         sensors = await self._get_return_sensors()
         if not sensors:
             return self.async_abort(reason="no_power_sensors")
 
-        # Get current selection
         current_sensor = self._config_entry.data.get(CONF_POWER_SENSOR)
-        current_type = self._config_entry.data.get(
-            CONF_POWER_SENSOR_TYPE, POWER_SENSOR_TYPE_RETURN
-        )
+
+        if user_input is not None:
+            self.data[CONF_POWER_SENSOR] = user_input[CONF_POWER_SENSOR]
+            self.data.pop(CONF_RETURN_SENSOR, None)
+            self.data.pop(CONF_USAGE_SENSOR, None)
+            return await self.async_step_device_config()
 
         schema = vol.Schema({
-            vol.Required(CONF_POWER_SENSOR_TYPE, default=current_type): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": POWER_SENSOR_TYPE_RETURN, "label": "Return sensor (always positive)"},
-                        {"value": POWER_SENSOR_TYPE_NET, "label": "Net power sensor (negative when exporting)"},
-                    ],
-                    mode=selector.SelectSelectorMode.LIST,
-                )
-            ),
-            vol.Required(CONF_POWER_SENSOR, default=current_sensor): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        {"value": key, "label": value}
-                        for key, value in sensors.items()
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
+            vol.Required(
+                CONF_POWER_SENSOR, default=current_sensor
+            ): self._sensor_dropdown(sensors),
         })
+        return self.async_show_form(step_id="power_sensor_net", data_schema=schema)
 
-        return self.async_show_form(step_id="power_sensor", data_schema=schema, errors=errors)
+    async def async_step_power_sensor_split(self, user_input=None):
+        """Pick separate return + usage sensors when changing the sensor."""
+        errors = {}
+        sensors = await self._get_return_sensors()
+        if not sensors:
+            return self.async_abort(reason="no_power_sensors")
+
+        current_return = self._config_entry.data.get(CONF_RETURN_SENSOR)
+        current_usage = self._config_entry.data.get(CONF_USAGE_SENSOR)
+
+        if user_input is not None:
+            if user_input[CONF_RETURN_SENSOR] == user_input[CONF_USAGE_SENSOR]:
+                errors[CONF_USAGE_SENSOR] = "sensors_must_differ"
+            else:
+                self.data[CONF_RETURN_SENSOR] = user_input[CONF_RETURN_SENSOR]
+                self.data[CONF_USAGE_SENSOR] = user_input[CONF_USAGE_SENSOR]
+                self.data.pop(CONF_POWER_SENSOR, None)
+                return await self.async_step_device_config()
+
+        schema = vol.Schema({
+            vol.Required(
+                CONF_RETURN_SENSOR, default=current_return
+            ): self._sensor_dropdown(sensors),
+            vol.Required(
+                CONF_USAGE_SENSOR, default=current_usage
+            ): self._sensor_dropdown(sensors),
+        })
+        return self.async_show_form(
+            step_id="power_sensor_split", data_schema=schema, errors=errors
+        )
 
     async def async_step_device_config(self, user_input=None):
         """Handle BC device URL updates."""

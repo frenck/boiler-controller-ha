@@ -4,7 +4,7 @@ Boiler Controller turns your electric boiler into a water battery. Instead of ex
 
 ## Features
 
-- Reads live net consumption/production from a P1 smart meter entity in Home Assistant
+- Reads live consumption/production from your P1 smart meter — either a single signed net sensor or a pair of separate return + usage sensors
 - Controls a Boiler Controller (BC) device over HTTP using watt-based setpoints
 - Four control modes: `auto`, `manual`, `on`, `off`
 - Exposes device telemetry sensors (power, heating percentage, temperature, energy, RSSI)
@@ -17,8 +17,20 @@ Boiler Controller turns your electric boiler into a water battery. Instead of ex
 3. Go to **Settings › Devices & Services**
 4. Click **Add Integration** and search for **Boiler Controller**
 5. Follow the configuration steps:
-   - Select your P1 smart meter power entity
+   - Pick the power-sensor mode that matches your P1 setup:
+     - **Net (1 sensor)** — one signed sensor where negative values mean you are exporting to the grid
+     - **Split (2 sensors)** — two non-negative sensors: one for grid return (export) and one for grid usage (import)
+   - Select the matching sensor entity (or entities)
    - Enter the URL of your BC device (e.g. `http://192.168.1.50`)
+
+### Power-sensor modes
+
+The integration computes a signed surplus (positive = exporting) from your configuration:
+
+- **Net mode**: `surplus = -net_value`
+- **Split mode**: `surplus = return - usage`
+
+In `auto` mode the boiler setpoint is `max(0, min(MAX_EXPORT_WATTS, boiler_watts + surplus))`. Because the surplus goes negative as soon as you start importing, the controller automatically backs off instead of getting stuck at 100%.
 
 ## Control Modes
 
@@ -57,7 +69,9 @@ To abort a running calibration press **Calibrate Stop**.
 | Entity | Type | Description |
 | --- | --- | --- |
 | **Status** | Sensor (text) | `Running` when the boiler is heating, `Idle` when off, `Calibration` during a calibration run. |
-| **Power Sensor** | Sensor (W) | Mirrors the configured P1 entity so you can confirm the source data. |
+| **Net Power** | Sensor (W) | *Net mode only.* Mirrors the configured signed P1 entity so you can confirm the source data. |
+| **Grid Return** | Sensor (W) | *Split mode only.* Mirrors the configured grid-return (export) entity. |
+| **Grid Usage** | Sensor (W) | *Split mode only.* Mirrors the configured grid-usage (import) entity. |
 | **Last Control Update** | Sensor (timestamp) | Timestamp of the last heating command sent to the device. |
 | **Device Power** | Sensor (W) | Live power draw reported by the BC device. |
 | **Heating Percentage** | Sensor (%) | Current output percentage reported by the BC device. |

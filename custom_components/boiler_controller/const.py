@@ -1,29 +1,34 @@
 DOMAIN = "boiler_controller"
 
 # Config entry schema version (bump when changing stored data shape)
-CONFIG_FLOW_VERSION = 5
+CONFIG_FLOW_VERSION = 6
 
 PLATFORMS = ["sensor", "select", "number", "button"]
 
 # Configuration flow step IDs
 STEP_POWER_SENSOR = "power_sensor"
+STEP_POWER_SENSOR_NET = "power_sensor_net"
+STEP_POWER_SENSOR_SPLIT = "power_sensor_split"
 STEP_DEVICE_CONFIG = "device_config"
 
 # Configuration keys
-# Entity ID of the power sensor used to derive the grid-return value.
-CONF_POWER_SENSOR = "power_sensor"
-# Power sensor semantics:
-#   "return" = always positive (Watts exported to the grid only)
-#   "net"    = signed net power (negative when exporting, positive when importing)
+# Power sensor selection.
+#   - In "net" mode CONF_POWER_SENSOR holds the single signed sensor
+#     (negative when exporting, positive when importing).
+#   - In "split" mode CONF_RETURN_SENSOR + CONF_USAGE_SENSOR hold the two
+#     separate sensors (both always >= 0).
 CONF_POWER_SENSOR_TYPE = "power_sensor_type"
+CONF_POWER_SENSOR = "power_sensor"
+CONF_RETURN_SENSOR = "return_sensor"
+CONF_USAGE_SENSOR = "usage_sensor"
 CONF_DEVICE_URL = "device_url"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_DEVICE_ID = "device_id"
 
 # Power sensor type values
-POWER_SENSOR_TYPE_RETURN = "return"
 POWER_SENSOR_TYPE_NET = "net"
-POWER_SENSOR_TYPES = [POWER_SENSOR_TYPE_RETURN, POWER_SENSOR_TYPE_NET]
+POWER_SENSOR_TYPE_SPLIT = "split"
+POWER_SENSOR_TYPES = [POWER_SENSOR_TYPE_NET, POWER_SENSOR_TYPE_SPLIT]
 
 # Boiler Controller mDNS hostname prefix (pb-bc-*)
 BC_HOST_PREFIX = ("pb-bc-",)
